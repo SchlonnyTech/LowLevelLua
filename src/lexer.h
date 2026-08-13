@@ -1,0 +1,129 @@
+#ifndef LEXER_H
+#define LEXER_H
+#include <stdbool.h>
+#include <stdint.h>
+
+typedef enum {
+  TOKEN_EOF,
+  TOKEN_ERROR,
+  TOKEN_IDENT,
+  TOKEN_NUMBER_INT,
+  TOKEN_NUMBER_FLOAT,
+  TOKEN_STRING,
+  TOKEN_FUNCTION,
+  TOKEN_LOCAL,
+  TOKEN_RETURN,
+  TOKEN_IF,
+  TOKEN_THEN,
+  TOKEN_ELSE,
+  TOKEN_ELSEIF,
+  TOKEN_END,
+  TOKEN_FOR,
+  TOKEN_WHILE,
+  TOKEN_DO,
+  TOKEN_IN,
+  TOKEN_REPEAT,
+  TOKEN_UNTIL,
+  TOKEN_BREAK,
+  TOKEN_CONTINUE,
+  TOKEN_ASM,
+  TOKEN_DEFER,
+  TOKEN_STRUCT,
+  TOKEN_TRUE,
+  TOKEN_FALSE,
+  TOKEN_NIL,
+  TOKEN_AND,
+  TOKEN_OR,
+  TOKEN_NOT,
+  TOKEN_TYPE_INT32,
+  TOKEN_TYPE_INT64,
+  TOKEN_TYPE_FLOAT32,
+  TOKEN_TYPE_FLOAT64,
+  TOKEN_TYPE_UINT8,
+  TOKEN_TYPE_UINT64,
+  TOKEN_TYPE_VOID,
+  TOKEN_TYPE_KW,
+  TOKEN_EXPORT,
+  TOKEN_TYPEOF,
+  TOKEN_TYPE_STRING,
+  TOKEN_TYPE_BOOLEAN,
+  TOKEN_TYPE_NUMBER,
+  TOKEN_TYPE_THREAD,
+  TOKEN_TYPE_ANY,
+  TOKEN_GENERIC,
+  TOKEN_MODULE,
+  TOKEN_LBRACE,
+  TOKEN_RBRACE,
+  TOKEN_LPAREN,
+  TOKEN_RPAREN,
+  TOKEN_LBRACK,
+  TOKEN_RBRACK,
+  TOKEN_SEMICOLON,
+  TOKEN_COLON,
+  TOKEN_COMMA,
+  TOKEN_DOT,
+  TOKEN_EQUALS,
+  TOKEN_EQ,
+  TOKEN_NEQ,
+  TOKEN_LT,
+  TOKEN_GT,
+  TOKEN_LTE,
+  TOKEN_GTE,
+  TOKEN_PLUS,
+  TOKEN_MINUS,
+  TOKEN_STAR,
+  TOKEN_SLASH,
+  TOKEN_PERCENT,
+  TOKEN_BITAND,
+  TOKEN_BITOR,
+  TOKEN_BITXOR,
+  TOKEN_TILDE,
+  TOKEN_SHL,
+  TOKEN_SHR,
+  TOKEN_ARROW,
+  TOKEN_DBLCOLON,
+  TOKEN_BANG,
+  TOKEN_WALRUS,
+  TOKEN_SHARP,
+  TOKEN_PLUS_EQ,
+  TOKEN_MINUS_EQ,
+  TOKEN_STAR_EQ,
+  TOKEN_SLASH_EQ,
+  TOKEN_PERCENT_EQ,
+  TOKEN_BITXOR_EQ,
+  TOKEN_BITAND_EQ,
+  TOKEN_BITOR_EQ,
+  TOKEN_CONCAT,
+  TOKEN_ELLIPSIS,
+  TOKEN_FLOOR_DIV,
+  TOKEN_FLOOR_DIV_EQ,
+  TOKEN_QUESTION,
+  TOKEN_AT,
+  TOKEN_DOLLAR,
+  TOKEN_BACKTICK,
+  TOKEN_BACKSLASH,
+  TOKEN_TYPE_INT,
+  TOKEN_ENUM
+} TokenType;
+
+typedef struct {
+  TokenType type;
+  char *text;
+  int line;
+  int column;
+  int64_t int_value;
+  double float_value;
+} Token;
+
+typedef struct {
+  const char *source;
+  int pos;
+  int line;
+  int column;
+} Lexer;
+
+Lexer *lexer_create(const char *source);
+Token *lexer_tokenize(Lexer *lexer, int *out_count);
+void lexer_destroy(Lexer *lexer);
+const char *token_type_name(TokenType type);
+#endif

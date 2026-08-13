@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operators - LLL</title><style>
+:root {
+    --bg: #1e1e1e;
+    --surface: #252526;
+    --surface2: #2d2d30;
+    --text: #cccccc;
+    --text2: #9d9d9d;
+    --accent: #569cd6;
+    --accent2: #4ec9b0;
+    --code-bg: #1a1a1a;
+    --border: #3e3e42;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.8;
+}
+
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 260px;
+    height: 100vh;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.sidebar h2 { color: var(--accent2); margin-bottom: 20px; font-size: 1.4em; }
+
+.search-box {
+    width: 100%;
+    padding: 10px 15px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.9em;
+    margin-bottom: 25px;
+    outline: none;
+}
+
+.search-box:focus { border-color: var(--accent); }
+
+.sidebar a {
+    display: block;
+    padding: 10px 15px;
+    color: var(--text2);
+    border-radius: 8px;
+    margin: 3px 0;
+    font-size: 0.9em;
+    text-decoration: none;
+    transition: all 0.2s;
+}
+
+.sidebar a:hover { background: var(--surface2); color: var(--accent2); }
+
+.sidebar a.active {
+    background: var(--accent);
+    color: white;
+    font-weight: bold;
+}
+
+.content {
+    margin-left: 280px;
+    padding: 50px;
+    max-width: 850px;
+}
+
+h1 {
+    color: var(--accent2);
+    border-bottom: 3px solid var(--accent);
+    padding-bottom: 20px;
+    margin-bottom: 40px;
+    font-size: 2.5em;
+}
+
+h2 {
+    color: var(--accent);
+    margin-top: 50px;
+    margin-bottom: 20px;
+    font-size: 1.8em;
+}
+
+h3 { color: var(--accent2); margin-top: 30px; margin-bottom: 15px; font-size: 1.4em; }
+
+p { margin: 15px 0; font-size: 1.05em; }
+
+.code-block {
+    position: relative;
+    background: var(--code-bg);
+    padding: 20px;
+    border-radius: 12px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    margin: 20px 0;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.85em;
+    line-height: 1.6;
+    white-space: pre;
+}
+
+.copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: var(--surface2);
+    color: var(--text2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-size: 0.8em;
+    cursor: pointer;
+    font-family: 'Segoe UI', sans-serif;
+}
+
+.copy-btn:hover { background: var(--accent); color: white; }
+
+table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+
+th { background: var(--surface2); color: var(--accent2); padding: 15px; text-align: left; }
+
+td { padding: 15px; border-bottom: 1px solid var(--border); color: var(--text); }
+
+tr:hover td { background: var(--surface); }
+
+ul, ol { margin: 15px 0; padding-left: 25px; }
+
+li { margin: 10px 0; color: var(--text); font-size: 1.05em; }
+
+a { color: var(--accent); text-decoration: none; }
+
+a:hover { color: var(--accent2); }
+</style></head><body>
+<div class="sidebar"><h2>LLL Docs</h2>
+<input type="text" id="search" class="search-box" placeholder="Search..." onkeyup="searchDocs()">
+<a href="index.html">Home</a>
+<a href="getting-started.html">Getting Started</a>
+<a href="variables.html">Variables</a>
+<a href="functions.html">Functions</a>
+<a href="control-flow.html">Control Flow</a>
+<a href="structs.html">Structs</a>
+<a href="enums.html">Enums</a>
+<a href="tables.html">Tables</a>
+<a href="operators.html" class="active">Operators</a>
+<a href="plugin-api.html">Plugin API</a>
+<a href="examples.html">Examples</a>
+</div><div class="content"><h1>Operators</h1>
+<h2>Arithmetic</h2>
+<p>+ Addition</p>
+<li>Subtraction</li>
+<p>* Multiplication</p>
+<p>/ Division</p>
+<p>% Modulo</p>
+<h2>Comparison</h2>
+<p>== Equal</p>
+<p>!= Not equal</p>
+<p>&lt; Less than</p>
+<p>&gt; Greater than</p>
+<p>&lt;= Less or equal</p>
+<p>&gt;= Greater or equal</p>
+<h2>Logical</h2>
+<p>and - AND</p>
+<p>or - OR</p>
+<p>not - NOT</p>
+<h2>String</h2>
+<p>.. - Concatenation</p>
+<h2>Assignment</h2>
+<p>= - Assign</p>
+<p>+= - Add and assign</p>
+<p>-= - Subtract and assign</p>
+<p>*= - Multiply and assign</p>
+<p>/= - Divide and assign</p></div><script>
+function searchDocs() {
+    const q = document.getElementById('search').value.toLowerCase();
+    document.querySelectorAll('.sidebar a').forEach(a => {
+        a.style.display = a.textContent.toLowerCase().includes(q) || !q ? 'block' : 'none';
+    });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.code-block').forEach(block => {
+        const btn = document.createElement('button');
+        btn.className = 'copy-btn';
+        btn.textContent = 'Copy';
+        btn.onclick = () => {
+            navigator.clipboard.writeText(block.textContent).then(() => {
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = 'Copy', 2000);
+            });
+        };
+        block.appendChild(btn);
+    });
+});
+</script></body></html>
