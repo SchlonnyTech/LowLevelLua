@@ -8,10 +8,6 @@
 
 #define LLL_PLUGIN_API_VERSION 1
 
-// Remove these - they conflict with codegen.h
-// typedef struct CodeGenContext CodeGenContext;
-// typedef struct ASTNode ASTNode;
-
 typedef struct PluginAPI {
   int version;
 
