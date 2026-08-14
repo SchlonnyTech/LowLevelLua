@@ -9,16 +9,17 @@
 typedef struct {
   FILE *output;
   PlatformInfo platform;
-  bool arch_x86;
+  bool in_func;
   bool has_main;
   bool is_module;
-  const char *current_file;
-  int last_line;
+  bool arch_x86;
   int defer_depth;
-  char *def_names[256];
-  ASTNode *def_exprs[256];
-  bool in_func;
-  bool jit_mode;
+  char *def_names[8];
+  ASTNode *def_exprs[8];
+  bool needs_min, needs_max, needs_abs;
+  bool needs_str_i, needs_str_d, needs_str_s, needs_str;
+  bool needs_cat;
+  bool needs_print;
 } CodeGenContext;
 
 void codegen_init(CodeGenContext *ctx, FILE *output, PlatformInfo platform);

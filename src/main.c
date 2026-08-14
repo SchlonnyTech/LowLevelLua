@@ -42,37 +42,8 @@
   if (DEBUG_FILE)                                                              \
   fprintf(stderr, "[FILE] " fmt, ##__VA_ARGS__)
 
-static unsigned int generate_build_id(const char *filename) {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-
-  struct stat st;
-  unsigned int file_size_factor = 0;
-  if (stat(filename, &st) == 0) {
-    file_size_factor = (unsigned int)(st.st_size % 1000000);
-  }
-
-  time_t now = tv.tv_sec;
-  struct tm *tm_info = localtime(&now);
-
-  unsigned int time_factor =
-      (tm_info->tm_year + 1900) * 1000000 + (tm_info->tm_mon + 1) * 10000 +
-      tm_info->tm_mday * 100 + tm_info->tm_hour * 4 + tm_info->tm_min;
-
-  unsigned int nanosec = tv.tv_usec * 1000;
-  unsigned int random_factor = rand() ^ (rand() << 16);
-
-  unsigned int build_id =
-      time_factor ^ file_size_factor ^ nanosec ^ random_factor;
-
-  if (build_id == 0)
-    build_id = 1;
-
-  return build_id;
-}
-
 #ifndef BUILD_NUMBER
-#define BUILD_NUMBER generate_build_id(__FILE__)
+#define BUILD_NUMBER 0
 #endif
 
 typedef struct {
@@ -84,7 +55,7 @@ typedef struct {
 static void banner(void) {
   fprintf(stdout,
           "##############################################\n"
-          "  LLL - Low Level Lua Compiler v%d.%d.%d (build %d)\n"
+          "  LLL - Low Level Lua Compiler v%d.%d.%d (build %s)\n"
           "  Self-contained: No external dependencies beyond the compiler\n"
           "  Author: schlonny\n"
           "  Performance: Native-speed execution\n"
@@ -398,8 +369,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "Cannot write %s\n", cf);
     return 1;
   }
-  fprintf(f, "/* LLL v%d.%d.%d */\n", LLL_VERSION_MAJOR, LLL_VERSION_MINOR,
-          LLL_VERSION_PATCH);
+  fprintf(f, "/* LLL v%d.%d.%d (build %s) */\n", LLL_VERSION_MAJOR,
+          LLL_VERSION_MINOR, LLL_VERSION_PATCH, BUILD_NUMBER);
 
   DPRINTF_CODEGEN("Initializing codegen\n");
   double t_cg_start = ms();

@@ -183,6 +183,113 @@ static const char *infer(ASTNode *n) {
   }
 }
 
+static void scan_runtime_needs(CodeGenContext *ctx, ASTNode *n) {
+  if (!n)
+    return;
+
+  switch (n->type) {
+  case NODE_PROGRAM:
+  case NODE_BLOCK:
+    for (int i = 0; i < n->block.statement_count; i++)
+      scan_runtime_needs(ctx, n->block.statements[i]);
+    break;
+  case NODE_FUNCTION:
+    scan_runtime_needs(ctx, n->func.body);
+    break;
+  case NODE_IF:
+    scan_runtime_needs(ctx, n->if_stmt.condition);
+    scan_runtime_needs(ctx, n->if_stmt.then_branch);
+    if (n->if_stmt.else_branch)
+      scan_runtime_needs(ctx, n->if_stmt.else_branch);
+    break;
+  case NODE_WHILE:
+    scan_runtime_needs(ctx, n->while_stmt.condition);
+    scan_runtime_needs(ctx, n->while_stmt.body);
+    break;
+  case NODE_REPEAT:
+    scan_runtime_needs(ctx, n->repeat_stmt.body);
+    scan_runtime_needs(ctx, n->repeat_stmt.condition);
+    break;
+  case NODE_FOR:
+    scan_runtime_needs(ctx, n->for_stmt.start);
+    scan_runtime_needs(ctx, n->for_stmt.end);
+    if (n->for_stmt.step)
+      scan_runtime_needs(ctx, n->for_stmt.step);
+    scan_runtime_needs(ctx, n->for_stmt.body);
+    break;
+  case NODE_RETURN:
+    scan_runtime_needs(ctx, n->return_stmt.expr);
+    break;
+  case NODE_LOCAL_VAR:
+    if (n->local_var.init)
+      scan_runtime_needs(ctx, n->local_var.init);
+    break;
+  case NODE_ASSIGN:
+    scan_runtime_needs(ctx, n->assign.target);
+    scan_runtime_needs(ctx, n->assign.value);
+    break;
+  case NODE_DEFER:
+    scan_runtime_needs(ctx, n->defer_stmt.expr);
+    break;
+  case NODE_CALL: {
+    const char *nm = n->call.name;
+    if (strcmp(nm, "min") == 0)
+      ctx->needs_min = true;
+    else if (strcmp(nm, "max") == 0)
+      ctx->needs_max = true;
+    else if (strcmp(nm, "abs") == 0)
+      ctx->needs_abs = true;
+    else if (strcmp(nm, "print") == 0) {
+      ctx->needs_print = true;
+      for (int i = 0; i < n->call.arg_count; i++) {
+        ASTNode *a = n->call.args[i];
+        if (a->type == NODE_STRING_LITERAL) {
+          ctx->needs_str_s = true;
+        } else if (a->type == NODE_FLOAT_LITERAL) {
+          ctx->needs_str_d = true;
+          ctx->needs_str = true;
+        } else if (a->type == NODE_INT_LITERAL || a->type == NODE_VARIABLE ||
+                   a->type == NODE_CALL || a->type == NODE_FIELD_ACCESS ||
+                   a->type == NODE_BINARY_OP || a->type == NODE_TERNARY) {
+          ctx->needs_str_i = true;
+          ctx->needs_str = true;
+        }
+      }
+    }
+    for (int i = 0; i < n->call.arg_count; i++)
+      scan_runtime_needs(ctx, n->call.args[i]);
+    break;
+  }
+  case NODE_BINARY_OP:
+    if (strcmp(n->binary.op, "..") == 0) {
+      ctx->needs_cat = true;
+      ctx->needs_str = true;
+      ctx->needs_str_i = true;
+      ctx->needs_str_d = true;
+      ctx->needs_str_s = true;
+    }
+    scan_runtime_needs(ctx, n->binary.left);
+    scan_runtime_needs(ctx, n->binary.right);
+    break;
+  case NODE_UNARY_OP:
+    scan_runtime_needs(ctx, n->unary.operand);
+    break;
+  case NODE_TERNARY:
+    scan_runtime_needs(ctx, n->ternary.condition);
+    scan_runtime_needs(ctx, n->ternary.then_expr);
+    scan_runtime_needs(ctx, n->ternary.else_expr);
+    break;
+  case NODE_FIELD_ACCESS:
+    scan_runtime_needs(ctx, n->field_access.object);
+    break;
+  case NODE_TYPE_CAST:
+    scan_runtime_needs(ctx, n->cast.expr);
+    break;
+  default:
+    break;
+  }
+}
+
 static void expr(CodeGenContext *ctx, ASTNode *n) {
   if (!n) {
     emit(ctx, "NULL");
@@ -213,7 +320,7 @@ static void expr(CodeGenContext *ctx, ASTNode *n) {
     break;
   case NODE_CALL: {
     const char *nm = n->call.name;
-    if (nm[0] == 'p' && strcmp(nm, "print") == 0) {
+    if (strcmp(nm, "print") == 0) {
       for (int i = 0; i < n->call.arg_count; i++) {
         if (i)
           fputs("printf(\"\\t\");", o);
@@ -659,40 +766,71 @@ static void enoom(CodeGenContext *ctx, ASTNode *n) {
 
 static void runtime(CodeGenContext *ctx) {
   FILE *o = ctx->output;
-  fputs(
-      "static int64_t lll_min(int64_t a,int64_t b){return a<b?a:b;}\n"
-      "static int64_t lll_max(int64_t a,int64_t b){return a>b?a:b;}\n"
-      "static int64_t lll_abs(int64_t v){return v<0?-v:v;}\n"
-      "static char* lll_str_i(int64_t "
-      "v){char*b=malloc(32);snprintf(b,32,\"%lld\",(long long)v);return b;}\n"
-      "static char* lll_str_d(double "
-      "v){char*b=malloc(64);snprintf(b,64,\"%g\",v);return b;}\n"
-      "static char* lll_str_s(char* s){return s?s:\"nil\";}\n"
-      "#define lll_str(x) _Generic((x),char*:lll_str_s,const "
-      "char*:lll_str_s,double:lll_str_d,float:lll_str_d,default:lll_str_i)(x)\n"
-      "static char* lll_cat2(const char*a,const char*b){\n"
-      "if(!a)a=\"\";if(!b)b=\"\";size_t la=strlen(a),lb=strlen(b);\n"
-      "char*r=malloc(la+lb+1);memcpy(r,a,la);memcpy(r+la,b,lb);r[la+lb]=0;"
-      "return r;}\n"
-      "#define lll_cat(a,b) lll_cat2(lll_str(a),lll_str(b))\n",
-      o);
-  for (int i = 0; i < 8; i++)
-    fprintf(o, "static void __d%d_c(int*);", i);
-  fputs("\n\n", o);
+
+  if (ctx->needs_min)
+    fputs("static int64_t lll_min(int64_t a,int64_t b){return a<b?a:b;}\n", o);
+  if (ctx->needs_max)
+    fputs("static int64_t lll_max(int64_t a,int64_t b){return a>b?a:b;}\n", o);
+  if (ctx->needs_abs)
+    fputs("static int64_t lll_abs(int64_t v){return v<0?-v:v;}\n", o);
+
+  if (ctx->needs_str_i)
+    fputs("static char* lll_str_i(int64_t "
+          "v){char*b=malloc(32);snprintf(b,32,\"%lld\",(long long)v);return "
+          "b;}\n",
+          o);
+  if (ctx->needs_str_d)
+    fputs("static char* lll_str_d(double "
+          "v){char*b=malloc(64);snprintf(b,64,\"%g\",v);return b;}\n",
+          o);
+  if (ctx->needs_str_s)
+    fputs("static char* lll_str_s(char* s){return s?s:\"nil\";}\n", o);
+
+  if (ctx->needs_str) {
+    fputs("#define lll_str(x) _Generic((x)", o);
+    if (ctx->needs_str_s)
+      fputs(",char*:lll_str_s,const char*:lll_str_s", o);
+    if (ctx->needs_str_d)
+      fputs(",double:lll_str_d,float:lll_str_d", o);
+    fputs(",default:lll_str_i)(x)\n", o);
+  }
+
+  if (ctx->needs_cat) {
+    fputs("static char* lll_cat2(const char*a,const char*b){\n", o);
+    fputs("if(!a)a=\"\";if(!b)b=\"\";size_t la=strlen(a),lb=strlen(b);\n", o);
+    fputs("char*r=malloc(la+lb+1);memcpy(r,a,la);memcpy(r+la,b,lb);r[la+lb]=0;"
+          "return r;}\n",
+          o);
+    fputs("#define lll_cat(a,b) lll_cat2(lll_str(a),lll_str(b))\n", o);
+  }
+
+  fputs("\n", o);
 }
 
 void codegen_generate_program(CodeGenContext *ctx, ASTNode *program) {
   ctx->in_func = false;
   FILE *o = ctx->output;
-  fputs("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
-        "#include <stdlib.h>\n#include <string.h>\n#include "
-        "<stdio.h>\n#include <stdarg.h>\n#include <math.h>\n",
-        o);
+
+  scan_runtime_needs(ctx, program);
+
+  fprintf(o, "/* Generated by LLL v%d.%d.%d */\n", LLL_VERSION_MAJOR,
+          LLL_VERSION_MINOR, LLL_VERSION_PATCH);
+
+  fputs("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n", o);
+  if (ctx->needs_str_i || ctx->needs_str_d || ctx->needs_cat)
+    fputs("#include <stdlib.h>\n", o);
+  if (ctx->needs_cat || ctx->needs_str_s || ctx->needs_str)
+    fputs("#include <string.h>\n", o);
+  if (ctx->needs_print)
+    fputs("#include <stdio.h>\n", o);
+
   codegen_emit_includes(o);
+
   fputs(
       "#ifdef _WIN32\n#define LLL_EXPORT __declspec(dllexport)\n#else\n#define "
       "LLL_EXPORT __attribute__((visibility(\"default\")))\n#endif\n\n",
       o);
+
   lll_plugins_emit_preamble(ctx, o);
   runtime(ctx);
 
@@ -765,10 +903,17 @@ int codegen_jit_exec(CodeGenContext *ctx, ASTNode *program) {
   ctx->output = mem;
   ctx->in_func = false;
 
-  fputs("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
-        "#include <stdlib.h>\n#include <string.h>\n#include "
-        "<stdio.h>\n#include <stdarg.h>\n#include <math.h>\n",
+  scan_runtime_needs(ctx, program);
+
+  fputs("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n",
         mem);
+  if (ctx->needs_str_i || ctx->needs_str_d || ctx->needs_cat)
+    fputs("#include <stdlib.h>\n", mem);
+  if (ctx->needs_cat || ctx->needs_str_s || ctx->needs_str)
+    fputs("#include <string.h>\n", mem);
+  if (ctx->needs_print)
+    fputs("#include <stdio.h>\n", mem);
+  fputs("#include <stdarg.h>\n#include <math.h>\n", mem);
   runtime(ctx);
 
   bool tl = false;
@@ -844,11 +989,17 @@ bool codegen_jit_compile(CodeGenContext *ctx, ASTNode *program,
   FILE *old = ctx->output;
   ctx->output = f;
   ctx->in_func = false;
-  fputs(
-      "#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n"
-      "#include <stdlib.h>\n#include <string.h>\n#include <stdio.h>\n#include "
-      "<stdarg.h>\n#include <math.h>\n#include <libtcc.h>\n\n",
-      f);
+
+  scan_runtime_needs(ctx, program);
+
+  fputs("#include <stdint.h>\n#include <stdbool.h>\n#include <stddef.h>\n", f);
+  if (ctx->needs_str_i || ctx->needs_str_d || ctx->needs_cat)
+    fputs("#include <stdlib.h>\n", f);
+  if (ctx->needs_cat || ctx->needs_str_s || ctx->needs_str)
+    fputs("#include <string.h>\n", f);
+  if (ctx->needs_print)
+    fputs("#include <stdio.h>\n", f);
+  fputs("#include <stdarg.h>\n#include <math.h>\n#include <libtcc.h>\n\n", f);
   runtime(ctx);
   fputs("int main(int "
         "a,char**v){TCCState*s=tcc_new();tcc_set_output_type(s,TCC_OUTPUT_"
