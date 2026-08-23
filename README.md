@@ -1,4 +1,4 @@
-# LLL - Low Level Language Compiler
+# LLL - Low Level Lua - Language Compiler
 
 LLL is a Lua-like language that compiles directly to LLVM IR for native performance. Zero C translation, zero dependencies beyond LLVM.
 
@@ -8,36 +8,47 @@ EARLY DEVELOPMENT - Working compiler with core features. LLVM IR generation, JIT
 
 ## Features
 
-Lua-like syntax with static typing. Compiles directly to LLVM IR (no C intermediate). JIT compilation using LLVM ExecutionEngine. Native binary output via LLVM TargetMachine. Structs and enums support. Syscall support. Inline LLVM assembly. Custom builtins (min, max, abs). Math functions (sqrt, pow, sin, cos, floor, ceil). String operations (strlen, strcat, strcmp). Memory management (malloc, free, memset, memcpy). Tables (1-indexed arrays). String concatenation with .. Recursive functions. Type inference.
+Lua-like syntax with static typing. Compiles directly to LLVM IR (no C intermediate).
+JIT compilation using LLVM ExecutionEngine.
+Native binary output via LLVM TargetMachine.
+Structs and enums support.
+Syscall support. Inline LLVM assembly. (not fully done)
+Custom builtins (min, max, abs).
+Math functions (sqrt, pow, sin, cos, floor, ceil).
+String operations (strlen, strcat, strcmp).
+Memory management (malloc, free, memset, memcpy). (not fully done)
+Tables (1-indexed arrays). 
+String concatenation with .. 
 
-## Building
-
+## Building 
+*linux*
+  ```bash
 mkdir build
 cd build
 cmake ..
 ninja
-
+```
 ## Quick Start
 
 Create hello.lll:
-
+```
 print("Hello, World!")
-
+```
 Compile (AOT):
-
+```bash
 ./lllc hello.lll -o hello
 ./hello
-
+```
 JIT:
-
+```
 ./lllc hello.lll --jit
-
+``` 
 Generate LLVM IR:
-
+```
 ./lllc hello.lll -S
-
+```
 ## Language Overview
-
+```lua
 -- Variables with type inference
 local name = "LLL"
 local version = 42
@@ -88,7 +99,7 @@ until num > 100
 -- Tables (1-indexed)
 local nums = {1, 2, 3, 4, 5}
 print(nums[1])
-
+```
 ## Command Line Options
 
 lllc file.lll - AOT compile to executable
