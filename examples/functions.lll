@@ -1,0 +1,15 @@
+local function add(a: int, b: int): int
+    return a + b
+end
+
+local function multiply(a: int, b: int): int
+    return a * b
+end
+
+local function greet(name: string): string
+    return "Hello, " .. name .. "!"
+end
+
+print(add(10, 20))
+print(multiply(7, 6))
+print(greet("World"))

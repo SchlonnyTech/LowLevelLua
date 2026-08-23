@@ -1,24 +1,21 @@
-# LLL - Low Level Lua Compiler
+# LLL - Low Level Language Compiler
 
-LLL is a Lua-like language that compiles to C for native performance. Zero dependencies, zero bullshit.
+LLL is a Lua-like language that compiles directly to LLVM IR for native performance. Zero C translation, zero dependencies beyond LLVM.
 
 ## Status
 
-EARLY DEVELOPMENT - The language is nearly not done. Many features are missing, buggy, or experimental. Do not use for production projects yet.
+EARLY DEVELOPMENT - Working compiler with core features. LLVM IR generation, JIT compilation, and native binary output all functional.
 
 ## Features
 
-- Lua-like syntax with static typing
-- Compiles to native C code
-- Structs and enums support
-- Plugin system (experimental)
-- JIT compilation using TCC (experimental)
-- Zero external dependencies
+Lua-like syntax with static typing. Compiles directly to LLVM IR (no C intermediate). JIT compilation using LLVM ExecutionEngine. Native binary output via LLVM TargetMachine. Structs and enums support. Syscall support. Inline LLVM assembly. Custom builtins (min, max, abs). Math functions (sqrt, pow, sin, cos, floor, ceil). String operations (strlen, strcat, strcmp). Memory management (malloc, free, memset, memcpy). Tables (1-indexed arrays). String concatenation with .. Recursive functions. Type inference.
 
 ## Building
 
-make
-sudo make install
+mkdir build
+cd build
+cmake ..
+ninja
 
 ## Quick Start
 
@@ -26,30 +23,34 @@ Create hello.lll:
 
 print("Hello, World!")
 
-Compile (AOT - recommended):
+Compile (AOT):
 
-lllc hello.lll
+./lllc hello.lll -o hello
 ./hello
 
-Or use JIT (experimental):
+JIT:
 
-lllc --jit hello.lll
+./lllc hello.lll --jit
+
+Generate LLVM IR:
+
+./lllc hello.lll -S
 
 ## Language Overview
 
 -- Variables with type inference
 local name = "LLL"
-local version = 1.0
+local version = 42
 
 -- Explicit types
-local count: int32 = 42
+local count: int = 42
 
--- Functions
-function greet(person: string): string
+-- Functions (luau-style)
+local function greet(person: string): string
     return "Hello, " .. person .. "!"
 end
 
--- Structs
+-- Structs (currently broken? or not?)
 struct Point
     x: float64
     y: float64
@@ -90,178 +91,52 @@ print(nums[1])
 
 ## Command Line Options
 
-| Command | Description | Status |
-|---------|-------------|--------|
-| lllc file.lll | AOT compile to executable | Stable |
-| lllc -S file.lll | Generate C code only | Stable |
-| lllc --cfile file.lll | Keep the generated C file | Stable |
-| lllc --jit file.lll | JIT compile using TCC | Experimental |
-| lllc -e code | Run code directly | Experimental |
-| lllc -c code | Compile code directly | Stable |
-| lllc | Interactive mode | Stable |
-| lllc --module file.lll | Build as shared library | Stable |
-| lllc --x86 file.lll | Compile for 32-bit | Experimental |
-
-## Compilation Modes
-
-### AOT (Ahead-of-Time) - Recommended
-
-AOT converts LLL to C, then GCC compiles to native machine code. Most reliable mode with full optimization.
-
-### JIT (Just-in-Time) - Experimental
-
-JIT uses TinyCC (TCC) to compile in memory. Fast compilation but less runtime optimization. Not fully implemented.
-
-## Project Structure
-
-LLL/
-  src/
-    main.c
-    lexer.c
-    lexer.h
-    parser.c
-    parser.h
-    parser_stmt.c
-    parser_expr.c
-    ast.h
-    codegen.c
-    codegen.h
-    lll.h
-    lll_plugin.c
-    lll_plugin.h
-    platform.c
-    platform.h
-    utils.c
-    utils.h
-    keywords/
-  docs/
-  build/
-  CMakeLists.txt
-  check.lll
+lllc file.lll - AOT compile to executable
+lllc -S file.lll - Generate LLVM IR only
+lllc --jit file.lll - JIT compile and execute
+lllc -e code - Run code directly
+lllc -c code - Compile code directly
+lllc - Interactive mode
+lllc --module file.lll - Build as shared library
+lllc --x86 file.lll - Compile for 32-bit
+lllc -v - Verbose mode (show LLVM IR)
 
 ## Available Types
 
-| Type | Size | Description |
-|------|------|-------------|
-| int32 | 4 bytes | 32-bit signed integer |
-| int64 | 8 bytes | 64-bit signed integer |
-| float32 | 4 bytes | 32-bit floating point |
-| float64 | 8 bytes | 64-bit floating point |
-| uint8 | 1 byte | 8-bit unsigned integer |
-| uint64 | 8 bytes | 64-bit unsigned integer |
-| string | variable | Character string |
-| boolean | 1 byte | True or false |
-| void | 0 bytes | No type |
+int - 64-bit signed integer
+int32 - 32-bit signed integer
+int64 - 64-bit signed integer
+float32 - 32-bit floating point
+float64 - 64-bit floating point
+uint8 - 8-bit unsigned integer
+uint64 - 64-bit unsigned integer
+string - Character string
+boolean - True or false
+void - No type
 
 ## Operators
 
-### Arithmetic
-+ Addition
-- Subtraction
-* Multiplication
-/ Division
-% Modulo
-
-### Comparison
-== Equal
-!= Not equal
-< Less than
-> Greater than
-<= Less or equal
->= Greater or equal
-
-### Logical
-and - AND
-or - OR
-not - NOT
-
-### String
-.. - Concatenation
-
-### Assignment
-= - Assign
-+= - Add and assign
--= - Subtract and assign
-*= - Multiply and assign
-/= - Divide and assign
+Arithmetic: + - * / %
+Comparison: == != < > <= >=
+Logical: and or not
+String: .. concatenation
+Assignment: = += -= *= /=
 
 ## Known Issues
 
-- Some language features are incomplete
-- Error messages may be confusing
-- Plugin system is experimental
-- JIT is experimental
-- Type system is basic
-- No garbage collector yet
-- Limited standard library
-- No classes or objects
-- No modules system (partial)
-- No bitwise operators yet
-- No switch statements
-- No exception handling
+No garbage collector yet. No classes or objects. No switch statements. No exception handling. Limited standard library. No bitwise operators yet. No closures. No variadic functions except built-ins. No hash tables. No table methods. No table length operator.
 
 ## What Works
 
-- Variables and type inference
-- Functions with parameters and return types
-- If/elseif/else statements
-- While loops
-- For loops (numeric)
-- Repeat until loops
-- Structs
-- Enums
-- Basic operators
-- String concatenation
-- Tables (basic arrays)
-- Recursion
-- Early returns
-- Nested if/else
-- Ternary expressions
+Variables and type inference. Functions with parameters and return types. If/elseif/else statements. While loops. For loops numeric. Repeat until loops. Structs. Enums. Basic operators. String concatenation. Tables basic arrays. Recursion. Early returns. Ternary expressions. Syscalls. Inline assembly. Custom builtins.
 
 ## What Does Not Work Yet
 
-- Full standard library
-- Garbage collection
-- Classes/objects
-- Modules system (partial)
-- Bitwise operators
-- Switch statements
-- Foreach loops
-- Exception handling
-- Default parameter values
-- Function overloading
-- Closures
-- Variadic functions (except built-ins)
-- Constants
-- Type aliases
-- Nullable types
-- Hash tables
-- Table methods
-- Table length operator
-- Nested tables (partial)
-
-## Plugin System - EXPERIMENTAL
-
-Plugins are shared libraries (.lllplugin) that extend LLL.
-
-Plugin locations:
-./llladdons/
-/usr/lib/llladdons/
-/usr/local/lib/llladdons/
-
-Plugin structure:
-lll_plugin_init(PluginAPI *api, PluginInfo *info)
-
-Example:
-int lll_plugin_init(PluginAPI *api, PluginInfo *info) {
-    info->name = "My Plugin";
-    info->version = "1.0";
-    return 0;
-}
+Full standard library. Garbage collection. Classes/objects. Modules system. Bitwise operators. Switch statements. Foreach loops. Exception handling. Default parameter values. Function overloading. Closures. Constants. Type aliases. Nullable types. Hash tables. Table methods. Nested tables.
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License
 
 ## Author
 
@@ -269,4 +144,4 @@ schlonny
 
 ## Contributing
 
-This project is in early development. Contributions are welcome but expect breaking changes.
+This project is in early development. Contributions welcome but expect breaking changes.

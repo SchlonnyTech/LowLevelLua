@@ -5,6 +5,14 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_package(LLVM REQUIRED CONFIG)
+
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+
+include_directories(${LLVM_INCLUDE_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
+
 find_library(TCC_LIB tcc)
 if(TCC_LIB)
   message(STATUS "Found libtcc: ${TCC_LIB} - enabling JIT")
@@ -39,6 +47,8 @@ file(GLOB_RECURSE LLLC_SOURCES
 add_executable(lllc ${LLLC_SOURCES})
 
 target_include_directories(lllc PRIVATE include src src/keywords)
+
+target_link_libraries(lllc LLVM)
 
 if(TCC_LIB)
   target_link_libraries(lllc ${TCC_LIB} dl m)

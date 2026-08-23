@@ -1,83 +1,111 @@
 #ifndef AST_H
 #define AST_H
+
 #include <stdbool.h>
 #include <stdint.h>
 
 typedef enum {
   NODE_PROGRAM,
+  NODE_BLOCK,
   NODE_FUNCTION,
-  NODE_BINARY_OP,
-  NODE_UNARY_OP,
+  NODE_RETURN,
+  NODE_LOCAL_VAR,
+  NODE_IF,
+  NODE_WHILE,
+  NODE_REPEAT,
+  NODE_FOR,
+  NODE_BREAK,
+  NODE_CONTINUE,
+  NODE_DEFER,
+  NODE_ASSIGN,
   NODE_CALL,
-  NODE_VARIABLE,
   NODE_INT_LITERAL,
   NODE_FLOAT_LITERAL,
   NODE_STRING_LITERAL,
   NODE_BOOL_LITERAL,
   NODE_NIL_LITERAL,
-  NODE_RETURN,
-  NODE_IF,
-  NODE_WHILE,
-  NODE_FOR,
-  NODE_FOR_IN,
-  NODE_GENERIC_FOR,
-  NODE_REPEAT,
-  NODE_ASM_BLOCK,
-  NODE_LOCAL_VAR,
-  NODE_STRUCT,
-  NODE_ENUM,
-  NODE_FIELD_ACCESS,
+  NODE_VARIABLE,
+  NODE_BINARY_OP,
+  NODE_UNARY_OP,
   NODE_POINTER_DEREF,
   NODE_ADDRESS_OF,
-  NODE_BLOCK,
-  NODE_DEFER,
-  NODE_TYPE_ANNOTATION,
-  NODE_ASSIGN,
-  NODE_IMPORT,
+  NODE_FIELD_ACCESS,
   NODE_KEYWORD,
-  NODE_TABLE,
+  NODE_TYPE_ANNOTATION,
   NODE_TYPE_CAST,
+  NODE_STRUCT,
+  NODE_ENUM,
   NODE_TERNARY,
-  NODE_BREAK,
-  NODE_CONTINUE
+  NODE_TABLE,
+  NODE_IMPORT,
+  NODE_ASM_BLOCK,
+  NODE_CBLOCK
 } NodeType;
 
-typedef struct ASTNode {
+typedef struct ASTNode ASTNode;
+
+struct ASTNode {
   NodeType type;
   int line;
   int column;
-  struct ASTNode *next;
   bool is_module;
   char *module_name;
   union {
     struct {
+      ASTNode **statements;
+      int statement_count;
+    } block;
+    struct {
       char *name;
-      struct ASTNode **params;
+      ASTNode **params;
       int param_count;
-      struct ASTNode **param_types;
-      struct ASTNode *return_type;
-      struct ASTNode *body;
-      bool is_exported;
-      bool is_variadic;
+      ASTNode **param_types;
+      ASTNode *return_type;
+      ASTNode *body;
       bool is_local;
+      bool is_exported;
     } func;
     struct {
-      struct ASTNode *left;
-      struct ASTNode *right;
-      char *op;
-    } binary;
-    struct {
-      struct ASTNode *operand;
-      char *op;
-    } unary;
+      ASTNode *expr;
+    } return_stmt;
     struct {
       char *name;
-      struct ASTNode **args;
+      ASTNode *type;
+      ASTNode *init;
+    } local_var;
+    struct {
+      ASTNode *condition;
+      ASTNode *then_branch;
+      ASTNode *else_branch;
+    } if_stmt;
+    struct {
+      ASTNode *condition;
+      ASTNode *body;
+    } while_stmt;
+    struct {
+      ASTNode *body;
+      ASTNode *condition;
+    } repeat_stmt;
+    struct {
+      char *var;
+      ASTNode *start;
+      ASTNode *end;
+      ASTNode *step;
+      ASTNode *body;
+    } for_stmt;
+    struct {
+      ASTNode *expr;
+    } defer_stmt;
+    struct {
+      ASTNode *target;
+      ASTNode *value;
+      char *op;
+    } assign;
+    struct {
+      char *name;
+      ASTNode **args;
       int arg_count;
     } call;
-    struct {
-      char *name;
-    } variable;
     struct {
       int64_t value;
     } int_lit;
@@ -91,106 +119,79 @@ typedef struct ASTNode {
       bool value;
     } bool_lit;
     struct {
-      struct ASTNode *expr;
-    } return_stmt;
-    struct {
-      struct ASTNode *condition;
-      struct ASTNode *then_branch;
-      struct ASTNode *else_branch;
-    } if_stmt;
-    struct {
-      struct ASTNode *condition;
-      struct ASTNode *body;
-    } while_stmt;
-    struct {
-      struct ASTNode *condition;
-      struct ASTNode *body;
-    } repeat_stmt;
-    struct {
-      char *var;
-      struct ASTNode *var_type;
-      struct ASTNode *start;
-      struct ASTNode *end;
-      struct ASTNode *step;
-      struct ASTNode *body;
-    } for_stmt;
-    struct {
-      char *code;
-    } asm_block;
-    struct {
       char *name;
-      struct ASTNode *type;
-      struct ASTNode *init;
-    } local_var;
+    } variable;
     struct {
-      char *name;
-      struct ASTNode **fields;
-      char **field_names;
-      struct ASTNode **field_values;
-      int field_count;
-      bool is_union;
-      bool has_methods;
-      struct ASTNode **methods;
-      int method_count;
-    } struct_def;
+      ASTNode *left;
+      ASTNode *right;
+      char *op;
+    } binary;
     struct {
-      char *name;
-      char **values;
-      struct ASTNode **value_exprs;
-      int value_count;
-    } enum_def;
+      ASTNode *operand;
+      char *op;
+    } unary;
     struct {
-      struct ASTNode *object;
+      ASTNode *operand;
+    } pointer_deref;
+    struct {
+      ASTNode *operand;
+    } address_of;
+    struct {
+      ASTNode *object;
       char *field;
     } field_access;
     struct {
-      struct ASTNode *operand;
-    } pointer_deref;
-    struct {
-      struct ASTNode *operand;
-    } address_of;
-    struct {
-      struct ASTNode **statements;
-      int statement_count;
-    } block;
-    struct {
-      struct ASTNode *expr;
-    } defer_stmt;
+      char *name;
+      ASTNode **args;
+      int arg_count;
+    } keyword;
     struct {
       char *type_name;
       int pointer_depth;
     } type_annot;
     struct {
-      struct ASTNode *target;
-      struct ASTNode *value;
-      char *op;
-    } assign;
-    struct {
-      char *module_path;
-    } import;
+      char *type_name;
+      ASTNode *expr;
+    } cast;
     struct {
       char *name;
-      struct ASTNode **args;
-      int arg_count;
-    } keyword;
+      ASTNode **fields;
+      char **field_names;
+      ASTNode **field_values;
+      int field_count;
+      bool has_methods;
+      void *methods;
+    } struct_def;
     struct {
-      struct ASTNode **fields;
+      char *name;
+      char **values;
+      ASTNode **value_exprs;
+      int value_count;
+    } enum_def;
+    struct {
+      ASTNode *condition;
+      ASTNode *then_expr;
+      ASTNode *else_expr;
+    } ternary;
+    struct {
+      ASTNode **fields;
       char **field_names;
       int field_count;
     } table;
     struct {
-      char *type_name;
-      struct ASTNode *expr;
-    } cast;
+      char *module_path;
+    } import;
     struct {
-      struct ASTNode *condition;
-      struct ASTNode *then_expr;
-      struct ASTNode *else_expr;
-    } ternary;
+      char *code;
+    } asm_block;
+    struct {
+      char *code;
+    } cblock;
   };
-} ASTNode;
+};
 
 ASTNode *ast_create_node(NodeType type, int line, int column);
-void ast_destroy(ASTNode *node);
+void ast_destroy(ASTNode *n);
 void ast_destroy_pools(void);
+
 #endif

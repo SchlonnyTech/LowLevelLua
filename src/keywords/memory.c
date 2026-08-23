@@ -2,7 +2,6 @@
 #include "keywords.h"
 #include <setjmp.h>
 #include <stdlib.h>
-#include <string.h>
 
 extern jmp_buf error_jmp;
 extern bool error_jmp_set;
@@ -236,3 +235,4 @@ void codegen_memory_c(FILE *out, ASTNode *node) {
     fprintf(out, ")");
   }
 }
+// outdated shit, steal if you wanna make an lang that compiles to C

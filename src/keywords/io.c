@@ -1,7 +1,6 @@
 #include "../utils.h"
 #include "keywords.h"
 #include <stdlib.h>
-#include <string.h>
 
 ASTNode *parse_io(Parser *p, int line, int col) {
   parser_advance(p);

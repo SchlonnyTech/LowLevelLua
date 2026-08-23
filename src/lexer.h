@@ -1,10 +1,11 @@
 #ifndef LEXER_H
 #define LEXER_H
+
 #include <stdbool.h>
 #include <stdint.h>
 
 typedef enum {
-  TOKEN_EOF,
+  TOKEN_EOF = 0,
   TOKEN_ERROR,
   TOKEN_IDENT,
   TOKEN_NUMBER_INT,
@@ -52,6 +53,8 @@ typedef enum {
   TOKEN_TYPE_ANY,
   TOKEN_GENERIC,
   TOKEN_MODULE,
+  TOKEN_TYPE_INT,
+  TOKEN_ENUM,
   TOKEN_LBRACE,
   TOKEN_RBRACE,
   TOKEN_LPAREN,
@@ -74,17 +77,17 @@ typedef enum {
   TOKEN_STAR,
   TOKEN_SLASH,
   TOKEN_PERCENT,
+  TOKEN_SHARP,
   TOKEN_BITAND,
   TOKEN_BITOR,
   TOKEN_BITXOR,
+  TOKEN_BANG,
   TOKEN_TILDE,
   TOKEN_SHL,
   TOKEN_SHR,
   TOKEN_ARROW,
   TOKEN_DBLCOLON,
-  TOKEN_BANG,
   TOKEN_WALRUS,
-  TOKEN_SHARP,
   TOKEN_PLUS_EQ,
   TOKEN_MINUS_EQ,
   TOKEN_STAR_EQ,
@@ -102,8 +105,8 @@ typedef enum {
   TOKEN_DOLLAR,
   TOKEN_BACKTICK,
   TOKEN_BACKSLASH,
-  TOKEN_TYPE_INT,
-  TOKEN_ENUM
+  TOKEN_CBLOCK,
+  TOKEN_COUNT
 } TokenType;
 
 typedef struct {
@@ -126,4 +129,5 @@ Lexer *lexer_create(const char *source);
 Token *lexer_tokenize(Lexer *lexer, int *out_count);
 void lexer_destroy(Lexer *lexer);
 const char *token_type_name(TokenType type);
+
 #endif

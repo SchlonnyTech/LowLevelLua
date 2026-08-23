@@ -302,6 +302,14 @@ ASTNode *parse_statement(Parser *p) {
     parser_expect(p, TOKEN_RPAREN, ")");
     return n;
   }
+  if (parser_match(p, TOKEN_CBLOCK)) {
+    parser_expect(p, TOKEN_LPAREN, "(");
+    ASTNode *n = ast_create_node(NODE_CBLOCK, line, col);
+    n->cblock.code = toktext(p);
+    parser_expect(p, TOKEN_STRING, "C code");
+    parser_expect(p, TOKEN_RPAREN, ")");
+    return n;
+  }
 
   return parse_expression(p);
 }

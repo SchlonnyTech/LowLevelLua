@@ -1,0 +1,5 @@
+print("Hello, LLL!")
+print("This is a real compiled language now!")
+
+local name: string = "LLL"
+print("Welcome to " .. name)

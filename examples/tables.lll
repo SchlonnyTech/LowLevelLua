@@ -1,0 +1,7 @@
+local nums = {1, 2, 3, 4, 5}
+print(nums[1])
+print(nums[3])
+print(nums[5])
+
+local mixed = {10, 20, 30}
+print(mixed[2])

@@ -27,4 +27,6 @@ ASTNode *parse_memory(Parser *p, int line, int col);
 void codegen_memory_c(FILE *out, ASTNode *node);
 ASTNode *parse_zstd(Parser *p, int line, int col);
 void codegen_zstd_c(FILE *out, ASTNode *node);
+ASTNode *parse_ffi(Parser *p, int line, int col);
+void codegen_ffi_c(FILE *out, ASTNode *node);
 #endif

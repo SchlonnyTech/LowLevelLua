@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define NODE_POOL_SIZE 4096
-#define DEBUG_PARSER 0
+#define DEBUG_PARSER 0 // put me to da 1 to unleash my power!
 #define DPRINTF_PARSER(fmt, ...)                                               \
   if (DEBUG_PARSER)                                                            \
   fprintf(stderr, "[PARSER] " fmt, ##__VA_ARGS__)
@@ -326,7 +326,7 @@ static void check_import_exists(ASTNode *node) {
 
 static void check_type_annotations(ASTNode *node) {
   if (node->type == NODE_LOCAL_VAR && !node->local_var.type &&
-      node->local_var.init) {
+      node->local_var.init && node->local_var.init->type != NODE_TABLE) {
     parser_warning(node->line, node->column,
                    "Missing type annotation, inferred from initialization");
   }

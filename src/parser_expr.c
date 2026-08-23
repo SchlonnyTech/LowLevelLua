@@ -153,6 +153,13 @@ static ASTNode *parse_prefix(Parser *p) {
   int line = p->current.line, col = p->current.column;
   DPRINTF_EXPR("parse_prefix: type=%d text='%s'\n", p->current.type,
                p->current.text ? p->current.text : "(null)");
+  if (parser_check(p, TOKEN_IDENT)) {
+    for (int i = 0; keyword_handlers[i].name; i++) {
+      if (strcmp(p->current.text, keyword_handlers[i].name) == 0) {
+        return keyword_handlers[i].parse(p, line, col);
+      }
+    }
+  }
 
   switch (p->current.type) {
   case TOKEN_STRING: {

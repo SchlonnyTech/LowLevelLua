@@ -8,11 +8,13 @@ extern void codegen_print_c(FILE *out, ASTNode *node);
 static const char *io_includes[] = {"<stdio.h>", "<stdlib.h>", "<unistd.h>"};
 static const char *mem_includes[] = {"<stdlib.h>", "<string.h>"};
 static const char *zstd_includes[] = {"<zstd.h>"};
+static const char *ffi_includes[] = {""};
 
 KeywordHandler keyword_handlers[] = {
     {"io", io_includes, 3, parse_io, codegen_io_c, false},
     {"mem", mem_includes, 2, parse_memory, codegen_memory_c, false},
     {"zstd", zstd_includes, 1, parse_zstd, codegen_zstd_c, false},
+    {"ffi", ffi_includes, 0, parse_ffi, codegen_ffi_c, false},
     {NULL, NULL, 0, NULL, NULL, false}};
 
 void mark_import(const char *name) {

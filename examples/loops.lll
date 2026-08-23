@@ -1,0 +1,18 @@
+print("For loop:")
+for i = 1, 5 do
+    print(i)
+end
+
+print("While loop:")
+local count: int = 5
+while count > 0 do
+    print(count)
+    count = count - 1
+end
+
+print("Repeat loop:")
+local num: int = 1
+repeat
+    num = num * 2
+until num > 100
+print(num)

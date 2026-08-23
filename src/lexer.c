@@ -10,51 +10,54 @@ typedef struct {
   TokenType type;
 } Keyword;
 
-static const Keyword keywords[] = {{"function", 8, TOKEN_FUNCTION},
-                                   {"local", 5, TOKEN_LOCAL},
-                                   {"return", 6, TOKEN_RETURN},
-                                   {"if", 2, TOKEN_IF},
-                                   {"then", 4, TOKEN_THEN},
-                                   {"else", 4, TOKEN_ELSE},
-                                   {"elseif", 6, TOKEN_ELSEIF},
-                                   {"end", 3, TOKEN_END},
-                                   {"for", 3, TOKEN_FOR},
-                                   {"while", 5, TOKEN_WHILE},
-                                   {"do", 2, TOKEN_DO},
-                                   {"in", 2, TOKEN_IN},
-                                   {"repeat", 6, TOKEN_REPEAT},
-                                   {"until", 5, TOKEN_UNTIL},
-                                   {"break", 5, TOKEN_BREAK},
-                                   {"continue", 8, TOKEN_CONTINUE},
-                                   {"asm", 3, TOKEN_ASM},
-                                   {"defer", 5, TOKEN_DEFER},
-                                   {"struct", 6, TOKEN_STRUCT},
-                                   {"true", 4, TOKEN_TRUE},
-                                   {"false", 5, TOKEN_FALSE},
-                                   {"nil", 3, TOKEN_NIL},
-                                   {"and", 3, TOKEN_AND},
-                                   {"or", 2, TOKEN_OR},
-                                   {"not", 3, TOKEN_NOT},
-                                   {"int32", 5, TOKEN_TYPE_INT32},
-                                   {"int64", 5, TOKEN_TYPE_INT64},
-                                   {"float32", 7, TOKEN_TYPE_FLOAT32},
-                                   {"float64", 7, TOKEN_TYPE_FLOAT64},
-                                   {"uint8", 5, TOKEN_TYPE_UINT8},
-                                   {"uint64", 6, TOKEN_TYPE_UINT64},
-                                   {"void", 4, TOKEN_TYPE_VOID},
-                                   {"type", 4, TOKEN_TYPE_KW},
-                                   {"export", 6, TOKEN_EXPORT},
-                                   {"typeof", 6, TOKEN_TYPEOF},
-                                   {"string", 6, TOKEN_TYPE_STRING},
-                                   {"boolean", 7, TOKEN_TYPE_BOOLEAN},
-                                   {"number", 6, TOKEN_TYPE_NUMBER},
-                                   {"thread", 6, TOKEN_TYPE_THREAD},
-                                   {"any", 3, TOKEN_TYPE_ANY},
-                                   {"generic", 7, TOKEN_GENERIC},
-                                   {"module", 6, TOKEN_MODULE},
-                                   {"int", 3, TOKEN_TYPE_INT},
-                                   {"enum", 4, TOKEN_ENUM},
-                                   {NULL, 0, TOKEN_EOF}};
+static const Keyword keywords[] = {
+    {"function", 8, TOKEN_FUNCTION},
+    {"local", 5, TOKEN_LOCAL},
+    {"return", 6, TOKEN_RETURN},
+    {"if", 2, TOKEN_IF},
+    {"then", 4, TOKEN_THEN},
+    {"else", 4, TOKEN_ELSE},
+    {"elseif", 6, TOKEN_ELSEIF},
+    {"end", 3, TOKEN_END},
+    {"for", 3, TOKEN_FOR},
+    {"while", 5, TOKEN_WHILE},
+    {"do", 2, TOKEN_DO},
+    {"in", 2, TOKEN_IN},
+    {"repeat", 6, TOKEN_REPEAT},
+    {"until", 5, TOKEN_UNTIL},
+    {"break", 5, TOKEN_BREAK},
+    {"continue", 8, TOKEN_CONTINUE},
+    {"asm", 3, TOKEN_ASM},
+    {"defer", 5, TOKEN_DEFER},
+    {"struct", 6, TOKEN_STRUCT},
+    {"true", 4, TOKEN_TRUE},
+    {"false", 5, TOKEN_FALSE},
+    {"nil", 3, TOKEN_NIL},
+    {"and", 3, TOKEN_AND},
+    {"or", 2, TOKEN_OR},
+    {"not", 3, TOKEN_NOT},
+    {"int32", 5, TOKEN_TYPE_INT32},
+    {"int64", 5, TOKEN_TYPE_INT64},
+    {"float32", 7, TOKEN_TYPE_FLOAT32},
+    {"float64", 7, TOKEN_TYPE_FLOAT64},
+    {"uint8", 5, TOKEN_TYPE_UINT8},
+    {"uint64", 6, TOKEN_TYPE_UINT64},
+    {"void", 4, TOKEN_TYPE_VOID},
+    {"type", 4, TOKEN_TYPE_KW},
+    {"export", 6, TOKEN_EXPORT},
+    {"typeof", 6, TOKEN_TYPEOF},
+    {"string", 6, TOKEN_TYPE_STRING},
+    {"boolean", 7, TOKEN_TYPE_BOOLEAN},
+    {"number", 6, TOKEN_TYPE_NUMBER},
+    {"thread", 6, TOKEN_TYPE_THREAD},
+    {"any", 3, TOKEN_TYPE_ANY},
+    {"generic", 7, TOKEN_GENERIC},
+    {"module", 6, TOKEN_MODULE},
+    {"int", 3, TOKEN_TYPE_INT},
+    {"enum", 4, TOKEN_ENUM},
+    {"__c", 3, TOKEN_CBLOCK},
+    {NULL, 0, TOKEN_EOF},
+};
 
 typedef struct {
   char c1;
@@ -86,7 +89,8 @@ static const DoubleCharToken dctokens[] = {
     {'.', '.', '.', TOKEN_ELLIPSIS, "..."},
     {'/', '/', '\0', TOKEN_FLOOR_DIV, "//"},
     {'/', '/', '=', TOKEN_FLOOR_DIV_EQ, "//="},
-    {'\0', '\0', '\0', TOKEN_EOF, NULL}};
+    {'\0', '\0', '\0', TOKEN_EOF, NULL},
+};
 
 Lexer *lexer_create(const char *source) {
   Lexer *lex = calloc(1, sizeof(Lexer));
@@ -332,9 +336,8 @@ static Token lexer_read_string(Lexer *lex) {
         break;
       }
       case '\n':
-        if (quote == '"') {
+        if (quote == '"')
           buf[len++] = '\n';
-        }
         break;
       default:
         buf[len++] = lexer_current(lex);
@@ -494,11 +497,9 @@ Token *lexer_tokenize(Lexer *lexer, int *out_count) {
     for (int k = 0; dctokens[k].text; k++) {
       if (c == dctokens[k].c1 && lexer_peek(lexer, 1) == dctokens[k].c2 &&
           (dctokens[k].c3 == '\0' || lexer_peek(lexer, 2) == dctokens[k].c3)) {
-
         int advance = dctokens[k].c3 != '\0' ? 3 : 2;
         for (int a = 0; a < advance; a++)
           lexer_advance(lexer);
-
         if (cnt >= cap - 1) {
           cap *= 2;
           tokens = realloc(tokens, sizeof(Token) * cap);
@@ -755,6 +756,7 @@ const char *token_type_name(TokenType type) {
       [TOKEN_DOLLAR] = "$",
       [TOKEN_BACKTICK] = "`",
       [TOKEN_BACKSLASH] = "\\",
+      [TOKEN_CBLOCK] = "__c",
   };
 
   if (type >= 0 && type < (TokenType)(sizeof(names) / sizeof(names[0]))) {

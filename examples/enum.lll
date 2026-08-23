@@ -1,0 +1,17 @@
+enum Color
+    RED = 1
+    GREEN = 2
+    BLUE = 4
+end
+
+enum Direction
+    NORTH
+    SOUTH
+    EAST
+    WEST
+end
+
+local my_color: int = Color.RED
+print(my_color) --RED
+print(Color.GREEN) --2
+print(Direction.NORTH) --NORTH

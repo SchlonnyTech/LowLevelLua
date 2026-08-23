@@ -1,0 +1,4 @@
+local function greet(person: string): string
+    return "Hello, " .. person .. "!"
+end
+print(greet("dad"))
