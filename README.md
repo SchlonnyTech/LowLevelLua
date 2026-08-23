@@ -156,3 +156,8 @@ schlonny
 ## Contributing
 
 This project is in early development. Contributions welcome but expect breaking changes.
+
+## Donating
+Want to help found our little company,projects and more?
+then you can donate to us https://coindrop.to/schlonny
+we for now only accept cryptocurrency
