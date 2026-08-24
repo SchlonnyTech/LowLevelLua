@@ -127,19 +127,40 @@ void codegen_for(CodeGenContext *ctx, ASTNode *stmt) {
 void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
   if (stmt->local_var.init && stmt->local_var.init->type == NODE_TABLE) {
     int count = stmt->local_var.init->table.field_count;
-    LLVMTypeRef et = LLVMInt64TypeInContext(ctx->llvm_ctx);
-    LLVMTypeRef at = LLVMArrayType(et, count + 1);
-    LLVMValueRef va = LLVMBuildAlloca(ctx->builder, at, stmt->local_var.name);
-    codegen_scope_add(ctx, stmt->local_var.name, va, at);
+    LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
+    LLVMTypeRef arr_t = LLVMArrayType(i64t, count);
+    LLVMValueRef va = LLVMBuildArrayAlloca(
+        ctx->builder, i64t, LLVMConstInt(i64t, count, 0), stmt->local_var.name);
+    codegen_scope_add(ctx, stmt->local_var.name, va, arr_t);
 
     for (int i = 0; i < count; i++) {
-      LLVMValueRef idx =
-          LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), i, 0);
-      LLVMValueRef z =
-          LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+      ASTNode *field = stmt->local_var.init->table.fields[i];
+      LLVMValueRef v;
+      if (field->type == NODE_STRING_LITERAL) {
+        v = LLVMBuildPtrToInt(ctx->builder,
+                              LLVMBuildGlobalStringPtr(
+                                  ctx->builder, field->string_lit.value, "s"),
+                              i64t, "str");
+        v = LLVMBuildOr(ctx->builder, v, LLVMConstInt(i64t, 1ULL << 63, 0),
+                        "tag");
+      } else if (field->type == NODE_INT_LITERAL) {
+        v = LLVMConstInt(i64t, field->int_lit.value, 0);
+      } else if (field->type == NODE_VARIABLE) {
+        LLVMTypeRef ft = codegen_scope_get_type(ctx, field->variable.name);
+        if (ft && LLVMGetTypeKind(ft) == LLVMPointerTypeKind) {
+          v = LLVMBuildPtrToInt(ctx->builder, codegen_variable(ctx, field),
+                                i64t, "str");
+          v = LLVMBuildOr(ctx->builder, v, LLVMConstInt(i64t, 1ULL << 63, 0),
+                          "tag");
+        } else {
+          v = codegen_variable(ctx, field);
+        }
+      } else {
+        v = LLVMConstInt(i64t, 0, 0);
+      }
       LLVMValueRef ep =
-          LLVMBuildGEP2(ctx->builder, at, va, (LLVMValueRef[]){z, idx}, 2, "e");
-      LLVMValueRef v = codegen_expr(ctx, stmt->local_var.init->table.fields[i]);
+          LLVMBuildGEP2(ctx->builder, i64t, va,
+                        (LLVMValueRef[]){LLVMConstInt(i64t, i, 0)}, 1, "e");
       LLVMBuildStore(ctx->builder, v, ep);
     }
     return;
@@ -153,7 +174,6 @@ void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
   } else {
     vt = LLVMInt64TypeInContext(ctx->llvm_ctx);
   }
-
   LLVMValueRef va = LLVMBuildAlloca(ctx->builder, vt, stmt->local_var.name);
   if (stmt->local_var.init) {
     LLVMValueRef iv = codegen_expr(ctx, stmt->local_var.init);
@@ -166,20 +186,22 @@ void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
 
 void codegen_assign(CodeGenContext *ctx, ASTNode *stmt) {
   if (stmt->assign.target->type == NODE_VARIABLE) {
-    LLVMValueRef t = codegen_scope_get(ctx, stmt->assign.target->variable.name);
-    if (!t) {
+    LLVMValueRef target =
+        codegen_scope_get(ctx, stmt->assign.target->variable.name);
+    if (!target) {
       codegen_error(ctx, "Undefined variable '%s'",
                     stmt->assign.target->variable.name);
       return;
     }
-    LLVMValueRef v = codegen_expr(ctx, stmt->assign.value);
-    LLVMBuildStore(ctx->builder, v, t);
+    LLVMValueRef value = codegen_expr(ctx, stmt->assign.value);
+    LLVMBuildStore(ctx->builder, value, target);
   }
 }
 
 void codegen_defer(CodeGenContext *ctx, ASTNode *stmt) {
-  if (stmt->defer_stmt.expr)
+  if (stmt->defer_stmt.expr) {
     codegen_expr(ctx, stmt->defer_stmt.expr);
+  }
 }
 
 void codegen_function(CodeGenContext *ctx, ASTNode *func) {

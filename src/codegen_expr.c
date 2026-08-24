@@ -31,11 +31,10 @@ LLVMValueRef codegen_variable(CodeGenContext *ctx, ASTNode *expr) {
   if (!elem_type) {
     elem_type = LLVMInt64TypeInContext(ctx->llvm_ctx);
   }
-
-  if (LLVMGetTypeKind(elem_type) == LLVMArrayTypeKind) {
+  if (LLVMGetTypeKind(elem_type) == LLVMArrayTypeKind ||
+      LLVMGetTypeKind(elem_type) == LLVMStructTypeKind) {
     return var;
   }
-
   return LLVMBuildLoad2(ctx->builder, elem_type, var, expr->variable.name);
 }
 LLVMValueRef codegen_field_access(CodeGenContext *ctx, ASTNode *expr) {
@@ -77,18 +76,12 @@ LLVMValueRef codegen_binary_op(CodeGenContext *ctx, ASTNode *expr) {
   const char *op = expr->binary.op;
   if (!op)
     return codegen_expr(ctx, expr->binary.left);
-
   if (strcmp(op, "[]") == 0) {
     LLVMValueRef arr = codegen_expr(ctx, expr->binary.left);
     LLVMValueRef idx;
     if (expr->binary.right->type == NODE_INT_LITERAL) {
       idx = LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx),
                          expr->binary.right->int_lit.value - 1, 0);
-    } else {
-      idx = codegen_expr(ctx, expr->binary.right);
-      idx = LLVMBuildSub(
-          ctx->builder, idx,
-          LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 1, 0), "idx");
     }
     LLVMValueRef ep =
         LLVMBuildGEP2(ctx->builder, LLVMInt64TypeInContext(ctx->llvm_ctx), arr,
@@ -230,12 +223,60 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   if (strcmp(name, "print") == 0) {
     for (int i = 0; i < expr->call.arg_count; i++) {
       ASTNode *arg = expr->call.args[i];
-      LLVMValueRef val = codegen_expr(ctx, arg);
-      LLVMTypeRef val_type = LLVMTypeOf(val);
-      LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
       LLVMTypeRef i8p =
           LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
       LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->llvm_ctx);
+      LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
+
+      if (arg->type == NODE_BINARY_OP && arg->binary.op &&
+          strcmp(arg->binary.op, "[]") == 0) {
+        LLVMValueRef val = codegen_expr(ctx, arg);
+
+        LLVMValueRef is_str = LLVMBuildICmp(ctx->builder, LLVMIntSLT, val,
+                                            LLVMConstInt(i64t, 0, 0), "is_str");
+        LLVMBasicBlockRef sb = LLVMAppendBasicBlockInContext(
+            ctx->llvm_ctx, ctx->current_func.function, "sb");
+        LLVMBasicBlockRef ib = LLVMAppendBasicBlockInContext(
+            ctx->llvm_ctx, ctx->current_func.function, "ib");
+        LLVMBasicBlockRef mb = LLVMAppendBasicBlockInContext(
+            ctx->llvm_ctx, ctx->current_func.function, "mb");
+        LLVMBuildCondBr(ctx->builder, is_str, sb, ib);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, sb);
+        LLVMValueRef mask = LLVMConstInt(i64t, 0x7FFFFFFFFFFFFFFFULL, 0);
+        LLVMValueRef ptr_val = LLVMBuildAnd(ctx->builder, val, mask, "clear");
+        LLVMValueRef str_ptr =
+            LLVMBuildIntToPtr(ctx->builder, ptr_val, i8p, "sp");
+        LLVMTypeRef putst = LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
+        LLVMValueRef putf = LLVMGetNamedFunction(ctx->module, "puts");
+        if (!putf)
+          putf = LLVMAddFunction(ctx->module, "puts", putst);
+        LLVMValueRef sa[] = {str_ptr};
+        LLVMBuildCall2(ctx->builder, putst, putf, sa, 1, "p");
+        LLVMBuildBr(ctx->builder, mb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, ib);
+        LLVMTypeRef pt =
+            LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p, i64t}, 2, 0);
+        LLVMValueRef pf = LLVMGetNamedFunction(ctx->module, "printf");
+        if (!pf)
+          pf = LLVMAddFunction(ctx->module, "printf", pt);
+        LLVMBasicBlockRef saved = LLVMGetInsertBlock(ctx->builder);
+        LLVMValueRef fmt =
+            LLVMBuildGlobalStringPtr(ctx->builder, "%lld\n", "fmt");
+        if (saved)
+          LLVMPositionBuilderAtEnd(ctx->builder, saved);
+        LLVMValueRef ia[] = {fmt, val};
+        LLVMBuildCall2(ctx->builder, pt, pf, ia, 2, "p");
+        LLVMBuildBr(ctx->builder, mb);
+
+        LLVMPositionBuilderAtEnd(ctx->builder, mb);
+        continue;
+      }
+
+      LLVMValueRef val = codegen_expr(ctx, arg);
+      LLVMTypeRef val_type = LLVMTypeOf(val);
+      LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
 
       if (val_kind == LLVMPointerTypeKind) {
         LLVMTypeRef putst = LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
@@ -245,7 +286,6 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
         LLVMValueRef args[] = {val};
         LLVMBuildCall2(ctx->builder, putst, putf, args, 1, "print");
       } else {
-        LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
         LLVMTypeRef pt =
             LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p, i64t}, 2, 0);
         LLVMValueRef pf = LLVMGetNamedFunction(ctx->module, "printf");
