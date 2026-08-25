@@ -1,0 +1,14 @@
+local fd: int = io.open("/tmp/lll_test.txt", 65)
+io.write(fd, "LLL file write works!\n", 22)
+io.close(fd)
+
+local fd2: int = io.open("/tmp/lll_test.txt", 0)
+local buf = mem.malloc(100)
+io.read(fd2, buf, 22)
+io.close(fd2)
+
+if buf[1] == 76 then
+    print("Write verified!")
+else
+    print("Write failed")
+end

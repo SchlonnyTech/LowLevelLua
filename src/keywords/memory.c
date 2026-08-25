@@ -1,238 +1,157 @@
-#include "../utils.h"
+#include "../codegen.h"
 #include "keywords.h"
-#include <setjmp.h>
-#include <stdlib.h>
+#include <llvm-c/Core.h>
+#include <stdio.h>
+#include <string.h>
 
-extern jmp_buf error_jmp;
-extern bool error_jmp_set;
-
-static void validate_arg_count(const char *method, int expected, int actual,
-                               int line, int col) {
-  if (actual != expected) {
-    error_report(line, col,
-                 "mem.%s requires exactly %d argument%s, but %d %s provided",
-                 method, expected, expected == 1 ? "" : "s", actual,
-                 actual == 1 ? "was" : "were");
-    if (error_jmp_set)
-      longjmp(error_jmp, 1);
-  }
+static LLVMValueRef kio_memcpy(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i8p, i64}, 3, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "memcpy");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "memcpy", ft);
+  LLVMValueRef dst = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef src = codegen_expr(ctx, node->keyword.args[1]);
+  LLVMValueRef len = codegen_expr(ctx, node->keyword.args[2]);
+  if (LLVMGetTypeKind(LLVMTypeOf(dst)) == LLVMIntegerTypeKind)
+    dst = LLVMBuildIntToPtr(ctx->builder, dst, i8p, "c");
+  if (LLVMGetTypeKind(LLVMTypeOf(src)) == LLVMIntegerTypeKind)
+    src = LLVMBuildIntToPtr(ctx->builder, src, i8p, "c");
+  LLVMValueRef args[] = {dst, src, len};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 3, "");
 }
 
-ASTNode *parse_memory(Parser *p, int line, int col) {
-  parser_advance(p);
-  parser_expect(p, TOKEN_DOT, ".");
-  char *method = string_copy(p->current.text);
-  parser_expect(p, TOKEN_IDENT, "method name");
-  parser_expect(p, TOKEN_LPAREN, "(");
-
-  ASTNode *node = ast_create_node(NODE_KEYWORD, line, col);
-  node->keyword.name = string_format("mem.%s", method);
-
-  Array *args = array_create(8);
-  if (!parser_check(p, TOKEN_RPAREN)) {
-    array_push(args, parse_expression(p));
-    while (parser_match(p, TOKEN_COMMA))
-      array_push(args, parse_expression(p));
-  }
-  parser_expect(p, TOKEN_RPAREN, ")");
-
-  int argc = args->count;
-
-  if (string_equals(method, "alloc")) {
-    validate_arg_count(method, 1, argc, line, col);
-  } else if (string_equals(method, "free")) {
-    validate_arg_count(method, 1, argc, line, col);
-  } else if (string_equals(method, "realloc")) {
-    validate_arg_count(method, 2, argc, line, col);
-  } else if (string_equals(method, "copy")) {
-    validate_arg_count(method, 3, argc, line, col);
-  } else if (string_equals(method, "move")) {
-    validate_arg_count(method, 3, argc, line, col);
-  } else if (string_equals(method, "set")) {
-    validate_arg_count(method, 3, argc, line, col);
-  } else if (string_equals(method, "zero")) {
-    validate_arg_count(method, 2, argc, line, col);
-  } else if (string_equals(method, "compare")) {
-    validate_arg_count(method, 3, argc, line, col);
-  } else if (string_equals(method, "find")) {
-    validate_arg_count(method, 3, argc, line, col);
-  } else if (string_equals(method, "swap")) {
-    validate_arg_count(method, 3, argc, line, col);
-  } else if (string_equals(method, "dup")) {
-    validate_arg_count(method, 2, argc, line, col);
-  } else if (string_equals(method, "sizeof")) {
-    validate_arg_count(method, 1, argc, line, col);
-  }
-
-  node->keyword.arg_count = argc;
-  node->keyword.args = malloc(sizeof(ASTNode *) * argc);
-  for (int i = 0; i < argc; i++)
-    node->keyword.args[i] = (ASTNode *)args->items[i];
-  array_destroy(args);
-  free(method);
-  return node;
+static LLVMValueRef kio_memset(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i32, i64}, 3, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "memset");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "memset", ft);
+  LLVMValueRef dst = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef val = codegen_expr(ctx, node->keyword.args[1]);
+  LLVMValueRef len = codegen_expr(ctx, node->keyword.args[2]);
+  if (LLVMGetTypeKind(LLVMTypeOf(dst)) == LLVMIntegerTypeKind)
+    dst = LLVMBuildIntToPtr(ctx->builder, dst, i8p, "c");
+  LLVMValueRef args[] = {dst, val, len};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 3, "");
 }
 
-static void emit_arg(FILE *out, ASTNode *a) {
-  if (!a) {
-    fprintf(out, "0");
-    return;
-  }
-  if (a->type == NODE_STRING_LITERAL)
-    fprintf(out, "\"%s\"", a->string_lit.value);
-  else if (a->type == NODE_INT_LITERAL)
-    fprintf(out, "%lld", (long long)a->int_lit.value);
-  else if (a->type == NODE_FLOAT_LITERAL)
-    fprintf(out, "%f", a->float_lit.value);
-  else if (a->type == NODE_VARIABLE)
-    fprintf(out, "%s", a->variable.name);
-  else if (a->type == NODE_KEYWORD)
-    codegen_keyword_c(out, a);
-  else
-    fprintf(out, "0");
+static LLVMValueRef kio_malloc(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i64}, 1, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "malloc");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "malloc", ft);
+  LLVMValueRef size = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef args[] = {size};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 1, "");
 }
 
-void codegen_memory_c(FILE *out, ASTNode *node) {
-  const char *m = node->keyword.name;
-  ASTNode **a = node->keyword.args;
-  int count = node->keyword.arg_count;
+static LLVMValueRef kio_free(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef void_t = LLVMVoidTypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(void_t, (LLVMTypeRef[]){i8p}, 1, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "free");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "free", ft);
+  LLVMValueRef ptr = codegen_expr(ctx, node->keyword.args[0]);
+  if (LLVMGetTypeKind(LLVMTypeOf(ptr)) == LLVMIntegerTypeKind)
+    ptr = LLVMBuildIntToPtr(ctx->builder, ptr, i8p, "c");
+  LLVMValueRef args[] = {ptr};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 1, "");
+}
 
-  if (string_equals(m, "mem.alloc")) {
-    if (count < 1) {
-      fprintf(out, "NULL");
-      return;
-    }
-    fprintf(out, "malloc(");
-    emit_arg(out, a[0]);
-    fprintf(out, ")");
-  } else if (string_equals(m, "mem.free")) {
-    if (count < 1) {
-      fprintf(out, ";");
-      return;
-    }
-    fprintf(out, "free(");
-    emit_arg(out, a[0]);
-    fprintf(out, ");\n");
-  } else if (string_equals(m, "mem.realloc")) {
-    if (count < 2) {
-      fprintf(out, "NULL");
-      return;
-    }
-    fprintf(out, "realloc(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ")");
-  } else if (string_equals(m, "mem.copy")) {
-    if (count < 3) {
-      fprintf(out, ";");
-      return;
-    }
-    fprintf(out, "memcpy(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ");\n");
-  } else if (string_equals(m, "mem.move")) {
-    if (count < 3) {
-      fprintf(out, ";");
-      return;
-    }
-    fprintf(out, "memmove(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ");\n");
-  } else if (string_equals(m, "mem.set")) {
-    if (count < 3) {
-      fprintf(out, ";");
-      return;
-    }
-    fprintf(out, "memset(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ");\n");
-  } else if (string_equals(m, "mem.zero")) {
-    if (count < 2) {
-      fprintf(out, ";");
-      return;
-    }
-    fprintf(out, "memset(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", 0, ");
-    emit_arg(out, a[1]);
-    fprintf(out, ");\n");
-  } else if (string_equals(m, "mem.compare")) {
-    if (count < 3) {
-      fprintf(out, "0");
-      return;
-    }
-    fprintf(out, "memcmp(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ")");
-  } else if (string_equals(m, "mem.find")) {
-    if (count < 3) {
-      fprintf(out, "NULL");
-      return;
-    }
-    fprintf(out, "memchr(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ")");
-  } else if (string_equals(m, "mem.swap")) {
-    if (count < 3) {
-      fprintf(out, ";");
-      return;
-    }
-    fprintf(out, "{\n    unsigned char _t[");
-    emit_arg(out, a[2]);
-    fprintf(out, "];\n    memcpy(_t, ");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ");\n    memcpy(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ", ");
-    emit_arg(out, a[2]);
-    fprintf(out, ");\n    memcpy(");
-    emit_arg(out, a[1]);
-    fprintf(out, ", _t, ");
-    emit_arg(out, a[2]);
-    fprintf(out, ");\n}\n");
-  } else if (string_equals(m, "mem.dup")) {
-    if (count < 2) {
-      fprintf(out, "NULL");
-      return;
-    }
-    fprintf(out, "lll_mem_dup(");
-    emit_arg(out, a[0]);
-    fprintf(out, ", ");
-    emit_arg(out, a[1]);
-    fprintf(out, ")");
-  } else if (string_equals(m, "mem.sizeof")) {
-    if (count < 1) {
-      fprintf(out, "0");
-      return;
-    }
-    fprintf(out, "sizeof(");
-    emit_arg(out, a[0]);
-    fprintf(out, ")");
+static LLVMValueRef kio_alloc(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i64, i64}, 2, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "calloc");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "calloc", ft);
+  LLVMValueRef count = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef size = codegen_expr(ctx, node->keyword.args[1]);
+  LLVMValueRef args[] = {count, size};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 2, "");
+}
+
+static LLVMValueRef kio_realloc(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i64}, 2, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "realloc");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "realloc", ft);
+  LLVMValueRef ptr = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef size = codegen_expr(ctx, node->keyword.args[1]);
+  if (LLVMGetTypeKind(LLVMTypeOf(ptr)) == LLVMIntegerTypeKind)
+    ptr = LLVMBuildIntToPtr(ctx->builder, ptr, i8p, "c");
+  LLVMValueRef args[] = {ptr, size};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 2, "");
+}
+
+static LLVMValueRef kio_memcmp(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i32, (LLVMTypeRef[]){i8p, i8p, i64}, 3, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "memcmp");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "memcmp", ft);
+  LLVMValueRef a = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef b = codegen_expr(ctx, node->keyword.args[1]);
+  LLVMValueRef len = codegen_expr(ctx, node->keyword.args[2]);
+  if (LLVMGetTypeKind(LLVMTypeOf(a)) == LLVMIntegerTypeKind)
+    a = LLVMBuildIntToPtr(ctx->builder, a, i8p, "c");
+  if (LLVMGetTypeKind(LLVMTypeOf(b)) == LLVMIntegerTypeKind)
+    b = LLVMBuildIntToPtr(ctx->builder, b, i8p, "c");
+  LLVMValueRef args[] = {a, b, len};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 3, "");
+}
+
+static LLVMValueRef kio_memmove(CodeGenContext *ctx, FILE *out, ASTNode *node) {
+  (void)out;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i8p, i64}, 3, 0);
+  LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "memmove");
+  if (!fn)
+    fn = LLVMAddFunction(ctx->module, "memmove", ft);
+  LLVMValueRef dst = codegen_expr(ctx, node->keyword.args[0]);
+  LLVMValueRef src = codegen_expr(ctx, node->keyword.args[1]);
+  LLVMValueRef len = codegen_expr(ctx, node->keyword.args[2]);
+  if (LLVMGetTypeKind(LLVMTypeOf(dst)) == LLVMIntegerTypeKind)
+    dst = LLVMBuildIntToPtr(ctx->builder, dst, i8p, "c");
+  if (LLVMGetTypeKind(LLVMTypeOf(src)) == LLVMIntegerTypeKind)
+    src = LLVMBuildIntToPtr(ctx->builder, src, i8p, "c");
+  LLVMValueRef args[] = {dst, src, len};
+  return LLVMBuildCall2(ctx->builder, ft, fn, args, 3, "");
+}
+
+static KeywordHandler mem_handlers[] = {
+    {"mem.memcpy", kio_memcpy, NULL, 3},
+    {"mem.memset", kio_memset, NULL, 3},
+    {"mem.malloc", kio_malloc, NULL, 1},
+    {"mem.free", kio_free, NULL, 1},
+    {"mem.alloc", kio_alloc, NULL, 2},
+    {"mem.realloc", kio_realloc, NULL, 2},
+    {"mem.memcmp", kio_memcmp, NULL, 3},
+    {"mem.memmove", kio_memmove, NULL, 3},
+    {NULL, NULL, NULL, 0},
+};
+
+void register_memory_keywords(void) {
+  for (int i = 0; mem_handlers[i].name; i++) {
+    register_keyword_handler(&mem_handlers[i]);
   }
 }
-// outdated shit, steal if you wanna make an lang that compiles to C

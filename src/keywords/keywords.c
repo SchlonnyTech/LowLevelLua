@@ -1,59 +1,48 @@
 #include "keywords.h"
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
-extern ASTNode *parse_print(Parser *p, int line, int col);
-extern void codegen_print_c(FILE *out, ASTNode *node);
+#define MAX_KEYWORDS 64
 
-static const char *io_includes[] = {"<stdio.h>", "<stdlib.h>", "<unistd.h>"};
-static const char *mem_includes[] = {"<stdlib.h>", "<string.h>"};
-static const char *zstd_includes[] = {"<zstd.h>"};
-static const char *ffi_includes[] = {""};
+static KeywordHandler registered[MAX_KEYWORDS];
+static int registered_count = 0;
 
 KeywordHandler keyword_handlers[] = {
-    {"io", io_includes, 3, parse_io, codegen_io_c, false},
-    {"mem", mem_includes, 2, parse_memory, codegen_memory_c, false},
-    {"zstd", zstd_includes, 1, parse_zstd, codegen_zstd_c, false},
-    {"ffi", ffi_includes, 0, parse_ffi, codegen_ffi_c, false},
-    {NULL, NULL, 0, NULL, NULL, false}};
-
-void mark_import(const char *name) {
-  for (int i = 0; keyword_handlers[i].name; i++) {
-    if (strcmp(name, keyword_handlers[i].name) == 0) {
-      keyword_handlers[i].used = true;
-      return;
-    }
+    {NULL, NULL, NULL, 0},
+};
+void register_keyword_handler(KeywordHandler *handler) {
+  if (registered_count < MAX_KEYWORDS) {
+    registered[registered_count] = *handler;
+    registered_count++;
   }
 }
 
-static int match_prefix(const char *name, const char *prefix) {
-  int len = strlen(prefix);
-  return strncmp(name, prefix, len) == 0;
-}
+int keyword_handlers_count(void) { return registered_count; }
 
-ASTNode *parse_keyword_statement(Parser *p) {
-  int line = p->current.line, col = p->current.column;
-  if (p->current.type != TOKEN_IDENT)
-    return NULL;
-  for (int i = 0; keyword_handlers[i].name; i++)
-    if (strcmp(p->current.text, keyword_handlers[i].name) == 0)
-      return keyword_handlers[i].parse(p, line, col);
-  return NULL;
-}
+void mark_import(const char *name) { (void)name; }
 
 void codegen_keyword_c(FILE *out, ASTNode *node) {
-  for (int i = 0; keyword_handlers[i].name; i++)
-    if (match_prefix(node->keyword.name, keyword_handlers[i].name)) {
-      keyword_handlers[i].codegen_c(out, node);
-      return;
-    }
+  (void)out;
+  (void)node;
+}
+#include "keywords.h"
+
+static bool keywords_initialized = false;
+
+void init_keywords(void) {
+  if (keywords_initialized)
+    return;
+  keywords_initialized = true;
+  register_memory_keywords();
+  register_io_keywords();
+  register_include_keywords();
 }
 
-void codegen_emit_includes(FILE *out) {
-  for (int i = 0; keyword_handlers[i].name; i++) {
-    if (!keyword_handlers[i].used)
-      continue;
-    for (int j = 0; j < keyword_handlers[i].include_count; j++)
-      fprintf(out, "#include %s\n", keyword_handlers[i].includes[j]);
+KeywordHandler *find_keyword(const char *name) {
+  for (int i = 0; i < registered_count; i++) {
+    if (strcmp(registered[i].name, name) == 0) {
+      return &registered[i];
+    }
   }
+  return NULL;
 }

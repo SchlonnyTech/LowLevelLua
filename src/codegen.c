@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "keywords.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,8 @@ void codegen_init(CodeGenContext *ctx, const char *module_name) {
   ctx->block_counter = 0;
 
   llvm_register_builtins(ctx);
+  init_keywords();
+  create_lll_syscall(ctx);
 }
 
 void codegen_destroy(CodeGenContext *ctx) {
@@ -247,12 +250,8 @@ LLVMBasicBlockRef codegen_get_break_block(CodeGenContext *ctx) {
 LLVMBasicBlockRef codegen_get_continue_block(CodeGenContext *ctx) {
   return ctx->loop_stack ? ctx->loop_stack->continue_block : NULL;
 }
-bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file) {
-  if (ctx->verbose) {
-    fprintf(stderr, "DEBUG: compile_to_object start\n");
-    fflush(stderr);
-  }
 
+bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file) {
   char *error = NULL;
   LLVMTargetRef target = NULL;
 
@@ -263,23 +262,13 @@ bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file) {
     return false;
   }
 
-  if (ctx->verbose) {
-    fprintf(stderr, "DEBUG: target found, creating target machine\n");
-    fflush(stderr);
-  }
-
   ctx->target_machine = LLVMCreateTargetMachine(
       target, ctx->target_triple, ctx->cpu_name, ctx->cpu_features,
-      LLVMCodeGenLevelNone, LLVMRelocDefault, LLVMCodeModelDefault);
+      LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
 
   if (!ctx->target_machine) {
     codegen_error(ctx, "Failed to create target machine");
     return false;
-  }
-
-  if (ctx->verbose) {
-    fprintf(stderr, "DEBUG: target machine created, emitting to file\n");
-    fflush(stderr);
   }
 
   if (LLVMTargetMachineEmitToFile(ctx->target_machine, ctx->module,
@@ -290,11 +279,6 @@ bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file) {
     if (error)
       LLVMDisposeMessage(error);
     return false;
-  }
-
-  if (ctx->verbose) {
-    fprintf(stderr, "DEBUG: object file emitted successfully\n");
-    fflush(stderr);
   }
 
   return true;

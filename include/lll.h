@@ -3,8 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 #define LLL_VERSION_MAJOR 1
-#define LLL_VERSION_MINOR 0
-#define LLL_VERSION_PATCH 3
+#define LLL_VERSION_MINOR 1
+#define LLL_VERSION_PATCH 0
 typedef enum {
   PLATFORM_WINDOWS,
   PLATFORM_LINUX,

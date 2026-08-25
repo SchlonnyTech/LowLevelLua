@@ -4,8 +4,6 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-
 #define DEBUG_STMT 0
 #define DPRINTF_STMT(fmt, ...)                                                 \
   if (DEBUG_STMT)                                                              \

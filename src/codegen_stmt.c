@@ -174,10 +174,22 @@ void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
   } else {
     vt = LLVMInt64TypeInContext(ctx->llvm_ctx);
   }
+
   LLVMValueRef va = LLVMBuildAlloca(ctx->builder, vt, stmt->local_var.name);
+
   if (stmt->local_var.init) {
     LLVMValueRef iv = codegen_expr(ctx, stmt->local_var.init);
-    LLVMBuildStore(ctx->builder, iv, va);
+    if (iv) {
+      LLVMTypeRef iv_type = LLVMTypeOf(iv);
+      if (LLVMGetTypeKind(iv_type) == LLVMPointerTypeKind &&
+          LLVMGetTypeKind(vt) == LLVMIntegerTypeKind) {
+        vt = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+        va = LLVMBuildAlloca(ctx->builder, vt, stmt->local_var.name);
+      }
+      LLVMBuildStore(ctx->builder, iv, va);
+    } else {
+      LLVMBuildStore(ctx->builder, LLVMConstNull(vt), va);
+    }
   } else {
     LLVMBuildStore(ctx->builder, LLVMConstNull(vt), va);
   }
@@ -266,6 +278,7 @@ void codegen_function(CodeGenContext *ctx, ASTNode *func) {
   codegen_scope_pop(ctx);
   ctx->functions_generated++;
   free(pts);
+  LLVMClearInsertionPosition(ctx->builder);
 }
 
 void codegen_struct(CodeGenContext *ctx, ASTNode *sd) {
@@ -377,25 +390,30 @@ bool codegen_generate(CodeGenContext *ctx, ASTNode *program) {
     codegen_error(ctx, "Invalid program AST");
     return false;
   }
+
   codegen_scope_push(ctx);
   ctx->global_scope = ctx->current_scope;
+
   for (int i = 0; i < program->block.statement_count; i++) {
-    ASTNode *n = program->block.statements[i];
-    if (!n)
+    ASTNode *node = program->block.statements[i];
+    if (!node)
       continue;
-    if (n->type == NODE_STRUCT)
-      codegen_struct(ctx, n);
-    else if (n->type == NODE_ENUM)
-      codegen_enum(ctx, n);
+    if (node->type == NODE_STRUCT)
+      codegen_struct(ctx, node);
+    else if (node->type == NODE_ENUM)
+      codegen_enum(ctx, node);
   }
+
   for (int i = 0; i < program->block.statement_count; i++) {
-    ASTNode *n = program->block.statements[i];
-    if (!n)
+    ASTNode *node = program->block.statements[i];
+    if (!node)
       continue;
-    if (n->type == NODE_FUNCTION)
-      codegen_function(ctx, n);
+    if (node->type == NODE_FUNCTION)
+      codegen_function(ctx, node);
   }
+
   LLVMClearInsertionPosition(ctx->builder);
+
   bool has_main = false;
   for (int i = 0; i < ctx->functions.count; i++) {
     if (strcmp(ctx->functions.names[i], "main") == 0) {
@@ -403,6 +421,7 @@ bool codegen_generate(CodeGenContext *ctx, ASTNode *program) {
       break;
     }
   }
+
   if (!has_main) {
     LLVMTypeRef mt =
         LLVMFunctionType(LLVMInt32TypeInContext(ctx->llvm_ctx), NULL, 0, 0);
@@ -428,14 +447,19 @@ bool codegen_generate(CodeGenContext *ctx, ASTNode *program) {
         codegen_stmt(ctx, n);
     }
 
-    if (!ctx->current_func.has_return)
-      LLVMBuildRet(ctx->builder,
-                   LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), 0, 0));
+    LLVMBasicBlockRef last_block = LLVMGetLastBasicBlock(mf);
+    if (last_block) {
+      LLVMPositionBuilderAtEnd(ctx->builder, last_block);
+    }
+    LLVMBuildRet(ctx->builder,
+                 LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), 0, 0));
   }
+
   if (ctx->verbose) {
     fprintf(stderr, "\n=== LLVM IR ===\n");
     LLVMDumpModule(ctx->module);
     fprintf(stderr, "=== End LLVM IR ===\n\n");
   }
+
   return !ctx->has_error;
 }

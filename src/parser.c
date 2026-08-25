@@ -292,6 +292,24 @@ static bool is_keyword_import(const char *name) {
   return false;
 }
 
+ASTNode *parse_keyword_statement(Parser *p) {
+  if (!parser_check(p, TOKEN_IDENT))
+    return NULL;
+
+  const char *name = p->current.text;
+
+  if (strchr(name, '.') == NULL)
+    return NULL;
+
+  KeywordHandler *kh = find_keyword(name);
+  if (!kh || !kh->parse)
+    return NULL;
+
+  int line = p->current.line;
+  int col = p->current.column;
+  return kh->parse(p, line, col);
+}
+
 static void check_import_exists(ASTNode *node) {
   if (node->type == NODE_IMPORT && node->import.module_path) {
     const char *path = node->import.module_path;
@@ -326,7 +344,8 @@ static void check_import_exists(ASTNode *node) {
 
 static void check_type_annotations(ASTNode *node) {
   if (node->type == NODE_LOCAL_VAR && !node->local_var.type &&
-      node->local_var.init && node->local_var.init->type != NODE_TABLE) {
+      node->local_var.init && node->local_var.init->type != NODE_TABLE &&
+      node->local_var.init->type != NODE_CALL) {
     parser_warning(node->line, node->column,
                    "Missing type annotation, inferred from initialization");
   }

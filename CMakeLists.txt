@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(LLLCompiler VERSION 1.0.0 LANGUAGES C)
+project(LLLCompiler VERSION 1.0.2 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -15,14 +15,15 @@ add_definitions(${LLVM_DEFINITIONS})
 
 find_library(TCC_LIB tcc)
 if(TCC_LIB)
-  message(STATUS "Found libtcc: ${TCC_LIB} - enabling JIT")
+  message(STATUS "Found libtcc: ${TCC_LIB} - enabling legacy JIT")
   add_definitions(-DLLL_JIT)
 else()
-  message(STATUS "libtcc not found - JIT disabled")
+  message(STATUS "libtcc not found - legacy JIT disabled")
 endif()
 
 if(WIN32)
   set(PLATFORM "windows")
+  add_definitions(-D_WIN32 -DLLL_WINDOWS)
 elseif(APPLE)
   set(PLATFORM "macos")
 else()
@@ -50,10 +51,10 @@ target_include_directories(lllc PRIVATE include src src/keywords)
 
 target_link_libraries(lllc LLVM)
 
-if(TCC_LIB)
-  target_link_libraries(lllc ${TCC_LIB} dl m)
+if(WIN32)
+  target_link_libraries(lllc ws2_32)
 else()
-  target_link_libraries(lllc m)
+  target_link_libraries(lllc dl m pthread)
 endif()
 
 install(TARGETS lllc DESTINATION bin)

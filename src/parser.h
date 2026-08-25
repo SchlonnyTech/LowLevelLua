@@ -31,5 +31,5 @@ void parser_set_source(const char *source);
 Token *peek(Parser *p);
 char *toktext(Parser *p);
 bool is_import_call(Parser *p);
-
+ASTNode *parse_keyword_statement(Parser *p);
 #endif

@@ -48,6 +48,11 @@ static void banner(void) {
           BUILD_NUMBER);
 }
 
+static void version(void) {
+  printf("LLL Compiler version %d.%d.%d (build %s)\n", LLL_VERSION_MAJOR,
+         LLL_VERSION_MINOR, LLL_VERSION_PATCH, BUILD_NUMBER);
+}
+
 static Options parse_args(int argc, char **argv) {
   Options o = {0};
   if (argc == 1) {
@@ -76,6 +81,9 @@ static Options parse_args(int argc, char **argv) {
     else if (strcmp(a, "--about") == 0) {
       banner();
       exit(0);
+    } else if (strcmp(a, "--version") == 0 || strcmp(a, "-version") == 0) {
+      version();
+      exit(0);
     } else if (strcmp(a, "--help") == 0) {
       banner();
       printf("Usage: lllc [file] | -e code | -c code | (interactive)\n");
@@ -86,6 +94,8 @@ static Options parse_args(int argc, char **argv) {
       printf("  --jit        JIT mode\n");
       printf("  --module     Build as module\n");
       printf("  --x86        32-bit mode\n");
+      printf("  --version    Show version information\n");
+      printf("  --about      Show banner\n");
       exit(0);
     } else if (strcmp(a, "--modname") == 0 && i + 1 < argc)
       o.module_name = argv[++i];
@@ -148,8 +158,6 @@ static int run_jit(const char *src, Options *opts) {
   bool success = codegen_generate(&ctx, ast);
   if (!success) {
     fprintf(stderr, "Codegen failed: %s\n", ctx.error_msg);
-    codegen_destroy(&ctx);
-    ast_destroy_pools();
     return 1;
   }
 
@@ -207,6 +215,10 @@ int main(int argc, char **argv) {
         break;
       if (!strcmp(line, "about")) {
         banner();
+        continue;
+      }
+      if (!strcmp(line, "version")) {
+        version();
         continue;
       }
       run_jit(line, &opts);
@@ -293,11 +305,11 @@ int main(int argc, char **argv) {
     }
   }
 
-  codegen_destroy(&ctx);
-  ast_destroy_pools();
-  free(output_base);
-  free(llvm_file);
-  free(obj_file);
+  // codegen_destroy(&ctx);
+  // ast_destroy_pools();
+  // free(output_base);
+  // free(llvm_file);
+  // free(obj_file);
 
   return ret;
 }
