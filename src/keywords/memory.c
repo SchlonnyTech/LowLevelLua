@@ -26,9 +26,8 @@ static LLVMValueRef kio_memcpy(CodeGenContext *ctx, FILE *out, ASTNode *node) {
 static LLVMValueRef kio_memset(CodeGenContext *ctx, FILE *out, ASTNode *node) {
   (void)out;
   LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
-  LLVMTypeRef i32 = LLVMInt32TypeInContext(ctx->llvm_ctx);
   LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
-  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i32, i64}, 3, 0);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i64, i64}, 3, 0);
   LLVMValueRef fn = LLVMGetNamedFunction(ctx->module, "memset");
   if (!fn)
     fn = LLVMAddFunction(ctx->module, "memset", ft);

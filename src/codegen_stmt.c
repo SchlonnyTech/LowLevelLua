@@ -129,8 +129,8 @@ void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
     int count = stmt->local_var.init->table.field_count;
     LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
     LLVMTypeRef arr_t = LLVMArrayType(i64t, count);
-    LLVMValueRef va = LLVMBuildArrayAlloca(
-        ctx->builder, i64t, LLVMConstInt(i64t, count, 0), stmt->local_var.name);
+    LLVMValueRef va =
+        LLVMBuildAlloca(ctx->builder, arr_t, stmt->local_var.name);
     codegen_scope_add(ctx, stmt->local_var.name, va, arr_t);
 
     for (int i = 0; i < count; i++) {
@@ -158,9 +158,10 @@ void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
       } else {
         v = LLVMConstInt(i64t, 0, 0);
       }
-      LLVMValueRef ep =
-          LLVMBuildGEP2(ctx->builder, i64t, va,
-                        (LLVMValueRef[]){LLVMConstInt(i64t, i, 0)}, 1, "e");
+      LLVMValueRef z = LLVMConstInt(i64t, 0, 0);
+      LLVMValueRef idx = LLVMConstInt(i64t, i, 0);
+      LLVMValueRef ep = LLVMBuildGEP2(ctx->builder, arr_t, va,
+                                      (LLVMValueRef[]){z, idx}, 2, "e");
       LLVMBuildStore(ctx->builder, v, ep);
     }
     return;

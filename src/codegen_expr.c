@@ -33,8 +33,7 @@ LLVMValueRef codegen_variable(CodeGenContext *ctx, ASTNode *expr) {
   if (!elem_type) {
     elem_type = LLVMInt64TypeInContext(ctx->llvm_ctx);
   }
-  if (LLVMGetTypeKind(elem_type) == LLVMArrayTypeKind ||
-      LLVMGetTypeKind(elem_type) == LLVMStructTypeKind) {
+  if (LLVMGetTypeKind(elem_type) == LLVMArrayTypeKind) {
     return var;
   }
   return LLVMBuildLoad2(ctx->builder, elem_type, var, expr->variable.name);
@@ -85,29 +84,28 @@ LLVMValueRef codegen_binary_op(CodeGenContext *ctx, ASTNode *expr) {
     if (expr->binary.right->type == NODE_INT_LITERAL) {
       idx = LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx),
                          expr->binary.right->int_lit.value - 1, 0);
-    } else {
-      idx = codegen_expr(ctx, expr->binary.right);
-      idx = LLVMBuildSub(
-          ctx->builder, idx,
-          LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 1, 0), "idx");
     }
 
-    LLVMTypeRef arr_type = LLVMTypeOf(arr);
-
-    if (LLVMGetTypeKind(arr_type) == LLVMPointerTypeKind) {
-      LLVMValueRef ptr = arr;
-      if (LLVMGetTypeKind(LLVMGetElementType(arr_type)) ==
-          LLVMPointerTypeKind) {
-        ptr = LLVMBuildLoad2(ctx->builder, LLVMGetElementType(arr_type), arr,
-                             "p");
+    if (expr->binary.left->type == NODE_VARIABLE) {
+      LLVMTypeRef st =
+          codegen_scope_get_type(ctx, expr->binary.left->variable.name);
+      if (st && LLVMGetTypeKind(st) == LLVMArrayTypeKind) {
+        LLVMValueRef z =
+            LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+        LLVMValueRef ep = LLVMBuildGEP2(ctx->builder, st, arr,
+                                        (LLVMValueRef[]){z, idx}, 2, "e");
+        return LLVMBuildLoad2(ctx->builder,
+                              LLVMInt64TypeInContext(ctx->llvm_ctx), ep, "v");
       }
-      LLVMValueRef ep =
-          LLVMBuildGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->llvm_ctx), ptr,
-                        (LLVMValueRef[]){idx}, 1, "b");
-      LLVMValueRef byte_val = LLVMBuildLoad2(
-          ctx->builder, LLVMInt8TypeInContext(ctx->llvm_ctx), ep, "byte");
-      return LLVMBuildZExt(ctx->builder, byte_val,
-                           LLVMInt64TypeInContext(ctx->llvm_ctx), "zext");
+      if (st && LLVMGetTypeKind(st) == LLVMPointerTypeKind) {
+        LLVMValueRef ep =
+            LLVMBuildGEP2(ctx->builder, LLVMInt8TypeInContext(ctx->llvm_ctx),
+                          arr, (LLVMValueRef[]){idx}, 1, "b");
+        LLVMValueRef byte_val = LLVMBuildLoad2(
+            ctx->builder, LLVMInt8TypeInContext(ctx->llvm_ctx), ep, "byte");
+        return LLVMBuildZExt(ctx->builder, byte_val,
+                             LLVMInt64TypeInContext(ctx->llvm_ctx), "zext");
+      }
     }
 
     LLVMValueRef ep =
