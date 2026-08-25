@@ -1,0 +1,19 @@
+local s1: string = "First String"
+local s2: string = "Second String"
+local s3: string = "Third String"
+local s4: string = "Fourth String"
+
+local stringtable = {s1, s2, s3, s4}
+
+local function multiply(a: int, b: int): int
+    return a * b
+end
+
+local count: int = 0
+
+local maxloop: int = 5
+
+
+for i = 1, maxloop do
+    print(stringtable)
+end

@@ -268,52 +268,31 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
 
           for (int j = 0; j < count; j++) {
             LLVMValueRef idx = LLVMConstInt(i64t, j, 0);
-            LLVMValueRef ep = LLVMBuildGEP2(ctx->builder, i64t, arr,
-                                            (LLVMValueRef[]){idx}, 1, "e");
+            LLVMValueRef z = LLVMConstInt(i64t, 0, 0);
+            LLVMValueRef ep = LLVMBuildGEP2(ctx->builder, vt, arr,
+                                            (LLVMValueRef[]){z, idx}, 2, "e");
             LLVMValueRef val = LLVMBuildLoad2(ctx->builder, i64t, ep, "v");
 
             LLVMValueRef is_str =
                 LLVMBuildICmp(ctx->builder, LLVMIntSLT, val,
                               LLVMConstInt(i64t, 0, 0), "is_str");
-            LLVMBasicBlockRef sb = LLVMAppendBasicBlockInContext(
-                ctx->llvm_ctx, ctx->current_func.function, "sb");
-            LLVMBasicBlockRef ib = LLVMAppendBasicBlockInContext(
-                ctx->llvm_ctx, ctx->current_func.function, "ib");
-            LLVMBasicBlockRef mb = LLVMAppendBasicBlockInContext(
-                ctx->llvm_ctx, ctx->current_func.function, "mb");
-            LLVMBuildCondBr(ctx->builder, is_str, sb, ib);
-
-            LLVMPositionBuilderAtEnd(ctx->builder, sb);
             LLVMValueRef mask = LLVMConstInt(i64t, 0x7FFFFFFFFFFFFFFFULL, 0);
             LLVMValueRef ptr_val =
                 LLVMBuildAnd(ctx->builder, val, mask, "clear");
             LLVMValueRef str_ptr =
                 LLVMBuildIntToPtr(ctx->builder, ptr_val, i8p, "sp");
+            LLVMValueRef int_ptr =
+                LLVMBuildIntToPtr(ctx->builder, val, i8p, "ip");
+            LLVMValueRef selected =
+                LLVMBuildSelect(ctx->builder, is_str, str_ptr, int_ptr, "sel");
+
             LLVMTypeRef putst =
                 LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
             LLVMValueRef putf = LLVMGetNamedFunction(ctx->module, "puts");
             if (!putf)
               putf = LLVMAddFunction(ctx->module, "puts", putst);
-            LLVMValueRef sa[] = {str_ptr};
+            LLVMValueRef sa[] = {selected};
             LLVMBuildCall2(ctx->builder, putst, putf, sa, 1, "p");
-            LLVMBuildBr(ctx->builder, mb);
-
-            LLVMPositionBuilderAtEnd(ctx->builder, ib);
-            LLVMTypeRef pt =
-                LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p, i64t}, 2, 0);
-            LLVMValueRef pf = LLVMGetNamedFunction(ctx->module, "printf");
-            if (!pf)
-              pf = LLVMAddFunction(ctx->module, "printf", pt);
-            LLVMBasicBlockRef saved = LLVMGetInsertBlock(ctx->builder);
-            LLVMValueRef fmt =
-                LLVMBuildGlobalStringPtr(ctx->builder, "%lld\n", "fmt");
-            if (saved)
-              LLVMPositionBuilderAtEnd(ctx->builder, saved);
-            LLVMValueRef ia[] = {fmt, val};
-            LLVMBuildCall2(ctx->builder, pt, pf, ia, 2, "p");
-            LLVMBuildBr(ctx->builder, mb);
-
-            LLVMPositionBuilderAtEnd(ctx->builder, mb);
           }
           continue;
         }
@@ -324,43 +303,20 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
         LLVMValueRef val = codegen_expr(ctx, arg);
         LLVMValueRef is_str = LLVMBuildICmp(ctx->builder, LLVMIntSLT, val,
                                             LLVMConstInt(i64t, 0, 0), "is_str");
-        LLVMBasicBlockRef sb = LLVMAppendBasicBlockInContext(
-            ctx->llvm_ctx, ctx->current_func.function, "sb");
-        LLVMBasicBlockRef ib = LLVMAppendBasicBlockInContext(
-            ctx->llvm_ctx, ctx->current_func.function, "ib");
-        LLVMBasicBlockRef mb = LLVMAppendBasicBlockInContext(
-            ctx->llvm_ctx, ctx->current_func.function, "mb");
-        LLVMBuildCondBr(ctx->builder, is_str, sb, ib);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, sb);
         LLVMValueRef mask = LLVMConstInt(i64t, 0x7FFFFFFFFFFFFFFFULL, 0);
         LLVMValueRef ptr_val = LLVMBuildAnd(ctx->builder, val, mask, "clear");
         LLVMValueRef str_ptr =
             LLVMBuildIntToPtr(ctx->builder, ptr_val, i8p, "sp");
+        LLVMValueRef int_ptr = LLVMBuildIntToPtr(ctx->builder, val, i8p, "ip");
+        LLVMValueRef selected =
+            LLVMBuildSelect(ctx->builder, is_str, str_ptr, int_ptr, "sel");
+
         LLVMTypeRef putst = LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
         LLVMValueRef putf = LLVMGetNamedFunction(ctx->module, "puts");
         if (!putf)
           putf = LLVMAddFunction(ctx->module, "puts", putst);
-        LLVMValueRef sa[] = {str_ptr};
+        LLVMValueRef sa[] = {selected};
         LLVMBuildCall2(ctx->builder, putst, putf, sa, 1, "p");
-        LLVMBuildBr(ctx->builder, mb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, ib);
-        LLVMTypeRef pt =
-            LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p, i64t}, 2, 0);
-        LLVMValueRef pf = LLVMGetNamedFunction(ctx->module, "printf");
-        if (!pf)
-          pf = LLVMAddFunction(ctx->module, "printf", pt);
-        LLVMBasicBlockRef saved = LLVMGetInsertBlock(ctx->builder);
-        LLVMValueRef fmt =
-            LLVMBuildGlobalStringPtr(ctx->builder, "%lld\n", "fmt");
-        if (saved)
-          LLVMPositionBuilderAtEnd(ctx->builder, saved);
-        LLVMValueRef ia[] = {fmt, val};
-        LLVMBuildCall2(ctx->builder, pt, pf, ia, 2, "p");
-        LLVMBuildBr(ctx->builder, mb);
-
-        LLVMPositionBuilderAtEnd(ctx->builder, mb);
         continue;
       }
 
