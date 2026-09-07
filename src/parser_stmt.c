@@ -4,6 +4,8 @@
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
 #define DEBUG_STMT 0
 #define DPRINTF_STMT(fmt, ...)                                                 \
   if (DEBUG_STMT)                                                              \
@@ -13,18 +15,21 @@ extern jmp_buf error_jmp;
 extern bool error_jmp_set;
 
 static ASTNode *parse_function_common(Parser *p, int line, int col,
-                                      bool is_local) {
+                                      bool is_local, bool is_exported) {
   ASTNode *n = ast_create_node(NODE_FUNCTION, line, col);
   if (parser_check(p, TOKEN_IDENT)) {
     n->func.name = toktext(p);
     parser_advance(p);
-  } else
+  } else {
     n->func.name = string_copy("");
+  }
 
   parser_expect(p, TOKEN_LPAREN, "(");
+
   int cap = 4, cnt = 0;
   char **params = malloc(sizeof(char *) * cap);
   ASTNode **types = malloc(sizeof(ASTNode *) * cap);
+
   if (!parser_check(p, TOKEN_RPAREN)) {
     do {
       if (cnt >= cap) {
@@ -41,27 +46,33 @@ static ASTNode *parse_function_common(Parser *p, int line, int col,
       cnt++;
     } while (parser_match(p, TOKEN_COMMA));
   }
+
   parser_expect(p, TOKEN_RPAREN, ")");
-  if (parser_match(p, TOKEN_COLON))
+
+  if (parser_match(p, TOKEN_ARROW) || parser_match(p, TOKEN_COLON)) {
     n->func.return_type = parse_type(p);
-  else {
+  } else {
     n->func.return_type = ast_create_node(NODE_TYPE_ANNOTATION, line, col);
     n->func.return_type->type_annot.type_name = "int32";
   }
 
   n->func.body = parse_block(p);
   parser_expect(p, TOKEN_END, "end");
+
   n->func.param_count = cnt;
   n->func.params = malloc(sizeof(ASTNode *) * cnt);
   n->func.param_types = malloc(sizeof(ASTNode *) * cnt);
+
   for (int i = 0; i < cnt; i++) {
     ASTNode *pn = ast_create_node(NODE_VARIABLE, line, col);
     pn->variable.name = params[i];
     n->func.params[i] = pn;
     n->func.param_types[i] = types[i];
   }
+
   n->func.is_local = is_local;
-  n->func.is_exported = !is_local;
+  n->func.is_exported = is_exported;
+
   free(params);
   free(types);
   return n;
@@ -70,17 +81,22 @@ static ASTNode *parse_function_common(Parser *p, int line, int col,
 static ASTNode *parse_local(Parser *p, int line, int col) {
   if (parser_check(p, TOKEN_FUNCTION)) {
     parser_advance(p);
-    return parse_function_common(p, line, col, true);
+    return parse_function_common(p, line, col, true, false);
   }
+
   ASTNode *n = ast_create_node(NODE_LOCAL_VAR, line, col);
+  n->local_var.is_exported = false;
+
   if (parser_check(p, TOKEN_IDENT)) {
     n->local_var.name = toktext(p);
     parser_advance(p);
+
     if (parser_match(p, TOKEN_COMMA)) {
       ASTNode *block = ast_create_node(NODE_BLOCK, line, col);
       int cap = 4, cnt = 0;
       ASTNode **stmts = malloc(sizeof(ASTNode *) * cap);
       stmts[cnt++] = n;
+
       do {
         if (cnt >= cap) {
           cap *= 2;
@@ -88,21 +104,27 @@ static ASTNode *parse_local(Parser *p, int line, int col) {
         }
         ASTNode *v = ast_create_node(NODE_LOCAL_VAR, line, col);
         v->local_var.name = toktext(p);
+        v->local_var.is_exported = false;
         parser_expect(p, TOKEN_IDENT, "var name");
         stmts[cnt++] = v;
       } while (parser_match(p, TOKEN_COMMA));
-      if (parser_match(p, TOKEN_EQUALS) || parser_match(p, TOKEN_WALRUS))
+
+      if (parser_match(p, TOKEN_EQUALS) || parser_match(p, TOKEN_WALRUS)) {
         for (int i = 0; i < cnt; i++) {
           if (i > 0 && !parser_match(p, TOKEN_COMMA))
             break;
           stmts[i]->local_var.init = parse_expression(p);
         }
+      }
+
       block->block.statement_count = cnt;
       block->block.statements = stmts;
       return block;
     }
+
     if (parser_match(p, TOKEN_COLON))
       n->local_var.type = parse_type(p);
+
     if (parser_match(p, TOKEN_EQUALS) || parser_match(p, TOKEN_WALRUS)) {
       if (is_import_call(p)) {
         parser_advance(p);
@@ -118,10 +140,104 @@ static ASTNode *parse_local(Parser *p, int line, int col) {
         parser_expect(p, TOKEN_RPAREN, ")");
         mark_import(imp->import.module_path);
         n->local_var.init = imp;
-      } else
+      } else {
         n->local_var.init = parse_expression(p);
+      }
     }
   }
+
+  return n;
+}
+
+static ASTNode *parse_module(Parser *p, int line, int col) {
+  ASTNode *n = ast_create_node(NODE_MODULE, line, col);
+
+  if (parser_check(p, TOKEN_IDENT)) {
+    n->module.name = toktext(p);
+    parser_advance(p);
+  } else {
+    n->module.name = string_copy("anonymous");
+  }
+
+  parser_expect(p, TOKEN_LBRACE, "{");
+
+  int cap = 16, cnt = 0;
+  ASTNode **stmts = malloc(sizeof(ASTNode *) * cap);
+
+  while (!parser_check(p, TOKEN_RBRACE) && !parser_check(p, TOKEN_EOF)) {
+    if (cnt >= cap) {
+      cap *= 2;
+      stmts = realloc(stmts, sizeof(ASTNode *) * cap);
+    }
+    stmts[cnt++] = parse_statement(p);
+    parser_match(p, TOKEN_SEMICOLON);
+  }
+
+  parser_expect(p, TOKEN_RBRACE, "}");
+
+  n->module.body = ast_create_node(NODE_BLOCK, line, col);
+  n->module.body->block.statement_count = cnt;
+  n->module.body->block.statements = stmts;
+
+  return n;
+}
+
+static ASTNode *parse_export(Parser *p, int line, int col) {
+  if (parser_match(p, TOKEN_FUNCTION)) {
+    return parse_function_common(p, line, col, false, true);
+  }
+
+  if (parser_match(p, TOKEN_LOCAL)) {
+    if (parser_check(p, TOKEN_FUNCTION)) {
+      parser_advance(p);
+      return parse_function_common(p, line, col, true, true);
+    }
+    ASTNode *node = parse_local(p, line, col);
+    if (node->type == NODE_LOCAL_VAR)
+      node->local_var.is_exported = true;
+    return node;
+  }
+
+  if (parser_check(p, TOKEN_IDENT)) {
+    ASTNode *node = ast_create_node(NODE_LOCAL_VAR, line, col);
+    node->local_var.name = toktext(p);
+    node->local_var.is_exported = true;
+    parser_advance(p);
+
+    if (parser_match(p, TOKEN_COLON))
+      node->local_var.type = parse_type(p);
+
+    if (parser_match(p, TOKEN_EQUALS) || parser_match(p, TOKEN_WALRUS))
+      node->local_var.init = parse_expression(p);
+
+    return node;
+  }
+
+  parser_error(line, col,
+               "Expected function, local, or variable after 'export'");
+  if (error_jmp_set)
+    longjmp(error_jmp, 1);
+  exit(1);
+}
+
+static ASTNode *parse_import(Parser *p, int line, int col) {
+  ASTNode *n = ast_create_node(NODE_IMPORT, line, col);
+
+  if (parser_check(p, TOKEN_STRING)) {
+    n->import.module_path = toktext(p);
+    parser_advance(p);
+  } else if (parser_check(p, TOKEN_IDENT)) {
+    n->import.module_path = toktext(p);
+    parser_advance(p);
+  } else {
+    parser_error(line, col, "Expected module name after import");
+    if (error_jmp_set)
+      longjmp(error_jmp, 1);
+    exit(1);
+  }
+
+  mark_import(n->import.module_path);
+
   return n;
 }
 
@@ -130,6 +246,7 @@ static ASTNode *parse_if(Parser *p, int line, int col) {
   n->if_stmt.condition = parse_expression(p);
   parser_expect(p, TOKEN_THEN, "then");
   n->if_stmt.then_branch = parse_block(p);
+
   ASTNode *current = n;
   while (parser_match(p, TOKEN_ELSEIF)) {
     ASTNode *elif =
@@ -140,8 +257,10 @@ static ASTNode *parse_if(Parser *p, int line, int col) {
     current->if_stmt.else_branch = elif;
     current = elif;
   }
+
   if (parser_match(p, TOKEN_ELSE))
     current->if_stmt.else_branch = parse_block(p);
+
   parser_expect(p, TOKEN_END, "end");
   return n;
 }
@@ -171,8 +290,10 @@ static ASTNode *parse_for(Parser *p, int line, int col) {
   n->for_stmt.start = parse_expression(p);
   parser_expect(p, TOKEN_COMMA, ",");
   n->for_stmt.end = parse_expression(p);
+
   if (parser_match(p, TOKEN_COMMA))
     n->for_stmt.step = parse_expression(p);
+
   parser_expect(p, TOKEN_DO, "do");
   n->for_stmt.body = parse_block(p);
   parser_expect(p, TOKEN_END, "end");
@@ -183,27 +304,34 @@ static ASTNode *parse_struct(Parser *p, int line, int col) {
   ASTNode *n = ast_create_node(NODE_STRUCT, line, col);
   n->struct_def.name = toktext(p);
   parser_expect(p, TOKEN_IDENT, "struct name");
+
   int cap = 8, cnt = 0;
   ASTNode **fields = malloc(sizeof(ASTNode *) * cap);
   char **names = malloc(sizeof(char *) * cap);
   ASTNode **values = calloc(cap, sizeof(ASTNode *));
+
   while (!parser_check(p, TOKEN_END) && !parser_check(p, TOKEN_EOF)) {
     if (!parser_check(p, TOKEN_IDENT))
       break;
+
     if (cnt >= cap) {
       cap *= 2;
       fields = realloc(fields, sizeof(ASTNode *) * cap);
       names = realloc(names, sizeof(char *) * cap);
       values = realloc(values, sizeof(ASTNode *) * cap);
     }
+
     names[cnt] = toktext(p);
     parser_advance(p);
     parser_expect(p, TOKEN_COLON, ":");
     fields[cnt] = parse_type(p);
+
     if (parser_match(p, TOKEN_EQUALS))
       values[cnt] = parse_expression(p);
+
     cnt++;
   }
+
   parser_expect(p, TOKEN_END, "end");
   n->struct_def.field_count = cnt;
   n->struct_def.fields = fields;
@@ -216,21 +344,27 @@ static ASTNode *parse_enum(Parser *p, int line, int col) {
   ASTNode *n = ast_create_node(NODE_ENUM, line, col);
   n->enum_def.name = toktext(p);
   parser_expect(p, TOKEN_IDENT, "enum name");
+
   int cap = 8, cnt = 0;
   char **values = malloc(sizeof(char *) * cap);
   ASTNode **exprs = calloc(cap, sizeof(ASTNode *));
+
   while (!parser_check(p, TOKEN_END) && !parser_check(p, TOKEN_EOF)) {
     if (cnt >= cap) {
       cap *= 2;
       values = realloc(values, sizeof(char *) * cap);
       exprs = realloc(exprs, sizeof(ASTNode *) * cap);
     }
+
     values[cnt] = toktext(p);
     parser_expect(p, TOKEN_IDENT, "enum value");
+
     if (parser_match(p, TOKEN_EQUALS))
       exprs[cnt] = parse_expression(p);
+
     cnt++;
   }
+
   parser_expect(p, TOKEN_END, "end");
   n->enum_def.value_count = cnt;
   n->enum_def.values = values;
@@ -242,6 +376,17 @@ ASTNode *parse_statement(Parser *p) {
   int line = p->current.line, col = p->current.column;
   DPRINTF_STMT("parse_statement: type=%d text='%s' pos=%d\n", p->current.type,
                p->current.text ? p->current.text : "(null)", p->pos);
+
+  if (parser_match(p, TOKEN_MODULE))
+    return parse_module(p, line, col);
+  if (parser_match(p, TOKEN_EXPORT))
+    return parse_export(p, line, col);
+
+  if (parser_check(p, TOKEN_IDENT) && strcmp(p->current.text, "import") == 0 &&
+      (!peek(p) || peek(p)->type != TOKEN_LPAREN)) {
+    parser_advance(p);
+    return parse_import(p, line, col);
+  }
 
   ASTNode *kw = parse_keyword_statement(p);
   if (kw)
@@ -258,7 +403,7 @@ ASTNode *parse_statement(Parser *p) {
   if (parser_match(p, TOKEN_FOR))
     return parse_for(p, line, col);
   if (parser_match(p, TOKEN_FUNCTION))
-    return parse_function_common(p, line, col, false);
+    return parse_function_common(p, line, col, false, false);
   if (parser_match(p, TOKEN_STRUCT))
     return parse_struct(p, line, col);
   if (parser_match(p, TOKEN_ENUM))
@@ -317,6 +462,7 @@ ASTNode *parse_block(Parser *p) {
   ASTNode *block = ast_create_node(NODE_BLOCK, line, col);
   int cap = 16, cnt = 0;
   ASTNode **stmts = malloc(sizeof(ASTNode *) * cap);
+
   while (!parser_check(p, TOKEN_END) && !parser_check(p, TOKEN_ELSE) &&
          !parser_check(p, TOKEN_ELSEIF) && !parser_check(p, TOKEN_UNTIL) &&
          !parser_check(p, TOKEN_EOF)) {
@@ -327,6 +473,7 @@ ASTNode *parse_block(Parser *p) {
     stmts[cnt++] = parse_statement(p);
     parser_match(p, TOKEN_SEMICOLON);
   }
+
   block->block.statement_count = cnt;
   block->block.statements = stmts;
   return block;

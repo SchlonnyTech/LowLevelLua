@@ -1,6 +1,7 @@
 #include "codegen.h"
 #include <stdlib.h>
 #include <string.h>
+
 void llvm_register_builtins(CodeGenContext *ctx) {
   ctx->functions.capacity = 256;
   ctx->functions.names = calloc(ctx->functions.capacity, sizeof(char *));
@@ -90,6 +91,7 @@ void llvm_register_builtins(CodeGenContext *ctx) {
   ctx->functions.arg_counts[ctx->functions.count] = 1;
   ctx->functions.count++;
 }
+
 int llvm_get_builtin_type(CodeGenContext *ctx, const char *name) {
   for (int i = 0; i < ctx->functions.count; i++) {
     if (strcmp(ctx->functions.names[i], name) == 0) {

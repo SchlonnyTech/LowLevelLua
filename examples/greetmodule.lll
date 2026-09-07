@@ -1,0 +1,5 @@
+module greetmodule {
+    export local function greet(person: string): string
+        return "Hello, " .. person .. "!"
+    end
+}

@@ -232,6 +232,7 @@ LLVMValueRef codegen_asm(CodeGenContext *ctx, ASTNode *expr) {
       LLVMConstInlineAsm(ft, expr->asm_block.code, "", true, false);
   return LLVMBuildCall2(ctx->builder, ft, ia, NULL, 0, "asm");
 }
+
 LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   const char *name = expr->call.name;
   int bt = llvm_get_builtin_type(ctx, name);
@@ -244,6 +245,7 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
     if (strcmp(name, "abs") == 0)
       return builtin_abs(ctx, expr);
   }
+
   KeywordHandler *kh = find_keyword(name);
   if (kh && kh->codegen) {
     ASTNode *kw_node = ast_create_node(NODE_KEYWORD, expr->line, expr->column);
@@ -252,6 +254,7 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
     kw_node->keyword.arg_count = expr->call.arg_count;
     return kh->codegen(ctx, NULL, kw_node);
   }
+
   if (strcmp(name, "print") == 0) {
     for (int i = 0; i < expr->call.arg_count; i++) {
       ASTNode *arg = expr->call.args[i];
@@ -360,9 +363,26 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   }
 
   if (!func) {
-    if (bt == -1)
-      codegen_error(ctx, "Undefined function '%s'", name);
-    return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+    LLVMValueRef *args = malloc(sizeof(LLVMValueRef) * expr->call.arg_count);
+    LLVMTypeRef *param_types =
+        malloc(sizeof(LLVMTypeRef) * expr->call.arg_count);
+
+    for (int i = 0; i < expr->call.arg_count; i++) {
+      args[i] = codegen_expr(ctx, expr->call.args[i]);
+      param_types[i] = LLVMTypeOf(args[i]);
+    }
+
+    LLVMTypeRef return_type = LLVMInt64TypeInContext(ctx->llvm_ctx);
+    ft =
+        LLVMFunctionType(return_type, param_types, expr->call.arg_count, false);
+    func = LLVMAddFunction(ctx->module, name, ft);
+    LLVMSetLinkage(func, LLVMExternalLinkage);
+
+    LLVMValueRef result = LLVMBuildCall2(ctx->builder, ft, func, args,
+                                         expr->call.arg_count, "call");
+    free(args);
+    free(param_types);
+    return result;
   }
 
   LLVMTypeRef call_type = ft;

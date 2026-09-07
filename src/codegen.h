@@ -8,6 +8,7 @@
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
+#include <pthread.h>
 
 typedef enum {
   BUILTIN_PRINT,
@@ -32,6 +33,20 @@ typedef enum {
   SYSCALL_GETPID,
   SYSCALL_SLEEP
 } SyscallType;
+
+typedef enum { BUILD_DEBUG, BUILD_RELEASE } BuildType;
+
+typedef struct TypeCacheEntry {
+  char *key;
+  LLVMTypeRef type;
+  struct TypeCacheEntry *next;
+} TypeCacheEntry;
+
+typedef struct StringPoolEntry {
+  char *key;
+  LLVMValueRef value;
+  struct StringPoolEntry *next;
+} StringPoolEntry;
 
 typedef struct CodeGenContext {
   LLVMContextRef llvm_ctx;
@@ -91,6 +106,9 @@ typedef struct CodeGenContext {
 
   LLVMPassManagerRef pass_manager;
   int opt_level;
+  BuildType build_type;
+  LLVMCodeGenOptLevel optimization_level;
+  bool module_verified;
 
   const char *module_name;
   bool is_module;
@@ -115,7 +133,8 @@ typedef struct CodeGenContext {
   LLVMValueRef str_format;
 } CodeGenContext;
 
-void codegen_init(CodeGenContext *ctx, const char *module_name);
+void codegen_init(CodeGenContext *ctx, const char *module_name,
+                  BuildType build_type);
 void codegen_destroy(CodeGenContext *ctx);
 bool codegen_generate(CodeGenContext *ctx, ASTNode *program);
 bool codegen_compile_to_file(CodeGenContext *ctx, const char *output_file);
@@ -177,4 +196,5 @@ void llvm_register_builtins(CodeGenContext *ctx);
 LLVMValueRef codegen_syscall(CodeGenContext *ctx, int syscall_num,
                              LLVMValueRef *args, int arg_count);
 LLVMTypeRef codegen_scope_get_type(CodeGenContext *ctx, const char *name);
+
 #endif

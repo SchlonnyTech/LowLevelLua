@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -230,8 +231,12 @@ void codegen_function(CodeGenContext *ctx, ASTNode *func) {
   }
   LLVMTypeRef ft = LLVMFunctionType(rt, pts, func->func.param_count, 0);
   LLVMValueRef fn = LLVMAddFunction(ctx->module, func->func.name, ft);
-  LLVMSetLinkage(fn, func->func.is_exported ? LLVMExternalLinkage
-                                            : LLVMInternalLinkage);
+
+  if (func->func.is_exported || strcmp(func->func.name, "main") == 0) {
+    LLVMSetLinkage(fn, LLVMExternalLinkage);
+  } else {
+    LLVMSetLinkage(fn, LLVMInternalLinkage);
+  }
 
   if (ctx->functions.count >= ctx->functions.capacity) {
     ctx->functions.capacity =
@@ -392,6 +397,15 @@ bool codegen_generate(CodeGenContext *ctx, ASTNode *program) {
     return false;
   }
 
+  bool is_module_file = false;
+  for (int i = 0; i < program->block.statement_count; i++) {
+    ASTNode *node = program->block.statements[i];
+    if (node && node->type == NODE_MODULE) {
+      is_module_file = true;
+      break;
+    }
+  }
+
   codegen_scope_push(ctx);
   ctx->global_scope = ctx->current_scope;
 
@@ -411,49 +425,40 @@ bool codegen_generate(CodeGenContext *ctx, ASTNode *program) {
       continue;
     if (node->type == NODE_FUNCTION)
       codegen_function(ctx, node);
+    else if (node->type == NODE_MODULE) {
+      if (node->module.body) {
+        for (int j = 0; j < node->module.body->block.statement_count; j++) {
+          ASTNode *module_node = node->module.body->block.statements[j];
+          if (!module_node)
+            continue;
+          if (module_node->type == NODE_FUNCTION) {
+            char *full_name = string_format("%s.%s", node->module.name,
+                                            module_node->func.name);
+            free(module_node->func.name);
+            module_node->func.name = full_name;
+            codegen_function(ctx, module_node);
+          }
+        }
+      }
+    }
   }
 
   LLVMClearInsertionPosition(ctx->builder);
 
-  bool has_main = false;
-  for (int i = 0; i < ctx->functions.count; i++) {
-    if (strcmp(ctx->functions.names[i], "main") == 0) {
-      has_main = true;
-      break;
-    }
-  }
-
-  if (!has_main) {
-    LLVMTypeRef mt =
-        LLVMFunctionType(LLVMInt32TypeInContext(ctx->llvm_ctx), NULL, 0, 0);
-    LLVMValueRef mf = LLVMAddFunction(ctx->module, "main", mt);
-    LLVMBasicBlockRef entry =
-        LLVMAppendBasicBlockInContext(ctx->llvm_ctx, mf, "entry");
-    LLVMPositionBuilderAtEnd(ctx->builder, entry);
-
-    ctx->int_format =
-        LLVMBuildGlobalStringPtr(ctx->builder, "%lld\n", "int_fmt");
-    ctx->str_format = LLVMBuildGlobalStringPtr(ctx->builder, "%s\n", "str_fmt");
-
-    ctx->current_func.function = mf;
-    ctx->current_func.return_type = LLVMInt32TypeInContext(ctx->llvm_ctx);
-    ctx->current_func.has_return = false;
-
-    for (int i = 0; i < program->block.statement_count; i++) {
-      ASTNode *n = program->block.statements[i];
-      if (!n)
-        continue;
-      if (n->type != NODE_STRUCT && n->type != NODE_ENUM &&
-          n->type != NODE_FUNCTION)
-        codegen_stmt(ctx, n);
+  if (!is_module_file) {
+    bool has_main = false;
+    for (int i = 0; i < ctx->functions.count; i++) {
+      if (strcmp(ctx->functions.names[i], "main") == 0) {
+        has_main = true;
+        break;
+      }
     }
 
-    LLVMBasicBlockRef last_block = LLVMGetLastBasicBlock(mf);
-    if (last_block) {
-      LLVMPositionBuilderAtEnd(ctx->builder, last_block);
+    if (!has_main) {
+      codegen_error(
+          ctx, "No main function found. Program must have a 'main' function.");
+      return false;
     }
-    LLVMBuildRet(ctx->builder,
-                 LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), 0, 0));
   }
 
   if (ctx->verbose) {

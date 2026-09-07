@@ -5,13 +5,54 @@
 #include <stdlib.h>
 #include <string.h>
 
-void codegen_init(CodeGenContext *ctx, const char *module_name) {
+static bool llvm_initialized = false;
+static pthread_mutex_t llvm_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static TypeCacheEntry **type_cache = NULL;
+static int type_cache_size = 0;
+static StringPoolEntry **string_pool_hash = NULL;
+static int string_pool_hash_size = 0;
+
+static unsigned long hash_string(const char *str) {
+  unsigned long hash = 5381;
+  int c;
+  while ((c = *str++)) {
+    hash = ((hash << 5) + hash) + c;
+  }
+  return hash;
+}
+
+static void init_llvm_once(void) {
+  pthread_mutex_lock(&llvm_init_mutex);
+  if (!llvm_initialized) {
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmPrinter();
+    LLVMInitializeNativeAsmParser();
+    llvm_initialized = true;
+  }
+  pthread_mutex_unlock(&llvm_init_mutex);
+}
+
+static void init_type_cache(CodeGenContext *ctx) {
+  type_cache_size = 256;
+  type_cache = calloc(type_cache_size, sizeof(TypeCacheEntry *));
+}
+
+static void init_string_pool_hash(CodeGenContext *ctx) {
+  string_pool_hash_size = 256;
+  string_pool_hash = calloc(string_pool_hash_size, sizeof(StringPoolEntry *));
+}
+
+void codegen_init(CodeGenContext *ctx, const char *module_name,
+                  BuildType build_type) {
   memset(ctx, 0, sizeof(*ctx));
+  ctx->build_type = build_type;
   ctx->int_format = NULL;
   ctx->str_format = NULL;
-  LLVMInitializeNativeTarget();
-  LLVMInitializeNativeAsmPrinter();
-  LLVMInitializeNativeAsmParser();
+
+  init_llvm_once();
+  init_type_cache(ctx);
+  init_string_pool_hash(ctx);
 
   ctx->llvm_ctx = LLVMContextCreate();
   ctx->module = LLVMModuleCreateWithNameInContext(module_name, ctx->llvm_ctx);
@@ -22,7 +63,14 @@ void codegen_init(CodeGenContext *ctx, const char *module_name) {
 
   char *cpu = LLVMGetHostCPUName();
   ctx->cpu_name = cpu ? cpu : strdup("generic");
-  ctx->cpu_features = LLVMGetHostCPUFeatures();
+
+  if (build_type == BUILD_RELEASE) {
+    ctx->cpu_features = LLVMGetHostCPUFeatures();
+    ctx->optimization_level = LLVMCodeGenLevelAggressive;
+  } else {
+    ctx->cpu_features = strdup("");
+    ctx->optimization_level = LLVMCodeGenLevelNone;
+  }
 
   ctx->module_name = module_name;
   ctx->temp_counter = 0;
@@ -46,6 +94,41 @@ void codegen_destroy(CodeGenContext *ctx) {
     free(ctx->cpu_name);
   if (ctx->cpu_features)
     free(ctx->cpu_features);
+  if (ctx->target_machine)
+    LLVMDisposeTargetMachine(ctx->target_machine);
+
+  for (int i = 0; i < type_cache_size; i++) {
+    TypeCacheEntry *entry = type_cache[i];
+    while (entry) {
+      TypeCacheEntry *next = entry->next;
+      free(entry->key);
+      free(entry);
+      entry = next;
+    }
+  }
+  free(type_cache);
+
+  for (int i = 0; i < string_pool_hash_size; i++) {
+    StringPoolEntry *entry = string_pool_hash[i];
+    while (entry) {
+      StringPoolEntry *next = entry->next;
+      free(entry->key);
+      free(entry);
+      entry = next;
+    }
+  }
+  free(string_pool_hash);
+
+  if (ctx->functions.names) {
+    for (int i = 0; i < ctx->functions.count; i++) {
+      free(ctx->functions.names[i]);
+    }
+    free(ctx->functions.names);
+    free(ctx->functions.functions);
+    free(ctx->functions.types);
+    free(ctx->functions.builtin_types);
+    free(ctx->functions.arg_counts);
+  }
 }
 
 LLVMTypeRef codegen_type_from_string(CodeGenContext *ctx,
@@ -53,29 +136,62 @@ LLVMTypeRef codegen_type_from_string(CodeGenContext *ctx,
   if (!type_name)
     return LLVMInt64TypeInContext(ctx->llvm_ctx);
 
-  if (strcmp(type_name, "void") == 0)
-    return LLVMVoidTypeInContext(ctx->llvm_ctx);
-  if (strcmp(type_name, "bool") == 0)
-    return LLVMInt1TypeInContext(ctx->llvm_ctx);
-  if (strcmp(type_name, "int") == 0 || strcmp(type_name, "int64") == 0 ||
-      strcmp(type_name, "i64") == 0)
-    return LLVMInt64TypeInContext(ctx->llvm_ctx);
-  if (strcmp(type_name, "int32") == 0 || strcmp(type_name, "i32") == 0)
-    return LLVMInt32TypeInContext(ctx->llvm_ctx);
-  if (strcmp(type_name, "double") == 0 || strcmp(type_name, "f64") == 0)
-    return LLVMDoubleTypeInContext(ctx->llvm_ctx);
-  if (strcmp(type_name, "float") == 0 || strcmp(type_name, "f32") == 0)
-    return LLVMFloatTypeInContext(ctx->llvm_ctx);
-  if (strcmp(type_name, "string") == 0 || strcmp(type_name, "str") == 0)
-    return LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  unsigned long hash = hash_string(type_name) % type_cache_size;
+  TypeCacheEntry *entry = type_cache[hash];
 
-  for (int i = 0; i < ctx->struct_types.count; i++) {
-    if (strcmp(ctx->struct_types.names[i], type_name) == 0) {
-      return LLVMPointerType(ctx->struct_types.types[i], 0);
+  while (entry) {
+    if (strcmp(entry->key, type_name) == 0) {
+      return entry->type;
     }
+    entry = entry->next;
   }
 
-  return LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef type;
+  if (strcmp(type_name, "void") == 0)
+    type = LLVMVoidTypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "bool") == 0 || strcmp(type_name, "boolean") == 0)
+    type = LLVMInt1TypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "int") == 0 || strcmp(type_name, "int64") == 0 ||
+           strcmp(type_name, "i64") == 0 || strcmp(type_name, "number") == 0)
+    type = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "int32") == 0 || strcmp(type_name, "i32") == 0)
+    type = LLVMInt32TypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "double") == 0 || strcmp(type_name, "f64") == 0 ||
+           strcmp(type_name, "float64") == 0)
+    type = LLVMDoubleTypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "float") == 0 || strcmp(type_name, "f32") == 0 ||
+           strcmp(type_name, "float32") == 0)
+    type = LLVMFloatTypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "string") == 0 || strcmp(type_name, "str") == 0)
+    type = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  else if (strcmp(type_name, "uint8") == 0 || strcmp(type_name, "u8") == 0)
+    type = LLVMInt8TypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "uint64") == 0 || strcmp(type_name, "u64") == 0)
+    type = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  else if (strcmp(type_name, "any") == 0 || strcmp(type_name, "thread") == 0)
+    type = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  else {
+    for (int i = 0; i < ctx->struct_types.count; i++) {
+      if (strcmp(ctx->struct_types.names[i], type_name) == 0) {
+        type = LLVMPointerType(ctx->struct_types.types[i], 0);
+        entry = malloc(sizeof(TypeCacheEntry));
+        entry->key = strdup(type_name);
+        entry->type = type;
+        entry->next = type_cache[hash];
+        type_cache[hash] = entry;
+        return type;
+      }
+    }
+    type = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  }
+
+  entry = malloc(sizeof(TypeCacheEntry));
+  entry->key = strdup(type_name);
+  entry->type = type;
+  entry->next = type_cache[hash];
+  type_cache[hash] = entry;
+
+  return type;
 }
 
 LLVMTypeRef codegen_type_from_node(CodeGenContext *ctx, ASTNode *type_node) {
@@ -132,11 +248,16 @@ void codegen_error(CodeGenContext *ctx, const char *fmt, ...) {
   ctx->has_error = true;
   fprintf(stderr, "Codegen Error: %s\n", ctx->error_msg);
 }
+
 LLVMValueRef codegen_string_create(CodeGenContext *ctx, const char *str) {
-  for (int i = 0; i < ctx->string_pool.count; i++) {
-    if (strcmp(ctx->string_pool.strings[i], str) == 0) {
-      return ctx->string_pool.values[i];
+  unsigned long hash = hash_string(str) % string_pool_hash_size;
+  StringPoolEntry *entry = string_pool_hash[hash];
+
+  while (entry) {
+    if (strcmp(entry->key, str) == 0) {
+      return entry->value;
     }
+    entry = entry->next;
   }
 
   LLVMValueRef global = LLVMBuildGlobalStringPtr(ctx->builder, str, "str");
@@ -144,14 +265,11 @@ LLVMValueRef codegen_string_create(CodeGenContext *ctx, const char *str) {
   if (ctx->verbose)
     fprintf(stderr, "DEBUG: string created\n");
 
-  ctx->string_pool.strings = realloc(
-      ctx->string_pool.strings, sizeof(char *) * (ctx->string_pool.count + 1));
-  ctx->string_pool.values =
-      realloc(ctx->string_pool.values,
-              sizeof(LLVMValueRef) * (ctx->string_pool.count + 1));
-  ctx->string_pool.strings[ctx->string_pool.count] = strdup(str);
-  ctx->string_pool.values[ctx->string_pool.count] = global;
-  ctx->string_pool.count++;
+  entry = malloc(sizeof(StringPoolEntry));
+  entry->key = strdup(str);
+  entry->value = global;
+  entry->next = string_pool_hash[hash];
+  string_pool_hash[hash] = entry;
 
   return global;
 }
@@ -226,6 +344,7 @@ LLVMValueRef codegen_scope_get(CodeGenContext *ctx, const char *name) {
     fprintf(stderr, "DEBUG: scope_get NOT FOUND name=%s\n", name);
   return NULL;
 }
+
 void codegen_loop_push(CodeGenContext *ctx, LLVMBasicBlockRef cont,
                        LLVMBasicBlockRef brk) {
   struct LoopContext *loop = malloc(sizeof(struct LoopContext));
@@ -255,20 +374,36 @@ bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file) {
   char *error = NULL;
   LLVMTargetRef target = NULL;
 
-  if (LLVMGetTargetFromTriple(ctx->target_triple, &target, &error) != 0) {
-    codegen_error(ctx, "Failed to get target: %s", error ? error : "unknown");
-    if (error)
-      LLVMDisposeMessage(error);
-    return false;
-  }
+  if (!ctx->target_machine) {
+    if (LLVMGetTargetFromTriple(ctx->target_triple, &target, &error) != 0) {
+      codegen_error(ctx, "Failed to get target: %s", error ? error : "unknown");
+      if (error)
+        LLVMDisposeMessage(error);
+      return false;
+    }
 
-  ctx->target_machine = LLVMCreateTargetMachine(
-      target, ctx->target_triple, ctx->cpu_name, ctx->cpu_features,
-      LLVMCodeGenLevelDefault, LLVMRelocDefault, LLVMCodeModelDefault);
+    ctx->target_machine = LLVMCreateTargetMachine(
+        target, ctx->target_triple, ctx->cpu_name, ctx->cpu_features,
+        ctx->optimization_level, LLVMRelocDefault, LLVMCodeModelDefault);
+  }
 
   if (!ctx->target_machine) {
     codegen_error(ctx, "Failed to create target machine");
     return false;
+  }
+
+  if (ctx->build_type == BUILD_DEBUG && !ctx->module_verified) {
+    char *verify_error = NULL;
+    if (LLVMVerifyModule(ctx->module, LLVMReturnStatusAction, &verify_error)) {
+      codegen_error(ctx, "Module verification failed: %s",
+                    verify_error ? verify_error : "unknown error");
+      if (verify_error)
+        LLVMDisposeMessage(verify_error);
+      return false;
+    }
+    if (verify_error)
+      LLVMDisposeMessage(verify_error);
+    ctx->module_verified = true;
   }
 
   if (LLVMTargetMachineEmitToFile(ctx->target_machine, ctx->module,
