@@ -94,6 +94,8 @@ typedef struct CodeGenContext {
     char **names;
     LLVMTypeRef *types;
     int *field_counts;
+    char ***field_names;
+
     int count;
     int capacity;
   } struct_types;
@@ -197,4 +199,6 @@ LLVMValueRef codegen_syscall(CodeGenContext *ctx, int syscall_num,
                              LLVMValueRef *args, int arg_count);
 LLVMTypeRef codegen_scope_get_type(CodeGenContext *ctx, const char *name);
 
+int codegen_struct_field_index(CodeGenContext *ctx, LLVMTypeRef struct_type,
+                               const char *field_name);
 #endif

@@ -199,17 +199,60 @@ void codegen_local_var(CodeGenContext *ctx, ASTNode *stmt) {
 }
 
 void codegen_assign(CodeGenContext *ctx, ASTNode *stmt) {
-  if (stmt->assign.target->type == NODE_VARIABLE) {
-    LLVMValueRef target =
-        codegen_scope_get(ctx, stmt->assign.target->variable.name);
-    if (!target) {
-      codegen_error(ctx, "Undefined variable '%s'",
-                    stmt->assign.target->variable.name);
+  ASTNode *target = stmt->assign.target;
+  if (target->type == NODE_VARIABLE) {
+    LLVMValueRef target_ptr = codegen_scope_get(ctx, target->variable.name);
+    if (!target_ptr) {
+      codegen_error(ctx, "Undefined variable '%s'", target->variable.name);
       return;
     }
     LLVMValueRef value = codegen_expr(ctx, stmt->assign.value);
-    LLVMBuildStore(ctx->builder, value, target);
+    if (!value)
+      return;
+    LLVMBuildStore(ctx->builder, value, target_ptr);
+    return;
   }
+  if (target->type == NODE_FIELD_ACCESS) {
+    ASTNode *object = target->field_access.object;
+    const char *field_name = target->field_access.field;
+    if (!object || object->type != NODE_VARIABLE) {
+      codegen_error(ctx, "Invalid struct field assignment");
+      return;
+    }
+    LLVMValueRef object_ptr = codegen_scope_get(ctx, object->variable.name);
+    LLVMTypeRef object_type =
+        codegen_scope_get_type(ctx, object->variable.name);
+    if (!object_ptr) {
+      codegen_error(ctx, "Undefined variable '%s'", object->variable.name);
+      return;
+    }
+    if (!object_type || LLVMGetTypeKind(object_type) != LLVMStructTypeKind) {
+
+      codegen_error(ctx, "Variable '%s' is not a struct",
+                    object->variable.name);
+      return;
+    }
+    int field_index = codegen_struct_field_index(ctx, object_type, field_name);
+
+    if (field_index < 0) {
+      codegen_error(ctx, "Unknown field '%s' in struct", field_name);
+      return;
+    }
+    LLVMValueRef zero =
+        LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), 0, 0);
+    LLVMValueRef index =
+        LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), field_index, 0);
+    LLVMValueRef indices[] = {zero, index};
+    LLVMValueRef field_ptr = LLVMBuildGEP2(ctx->builder, object_type,
+                                           object_ptr, indices, 2, "field");
+    LLVMValueRef value = codegen_expr(ctx, stmt->assign.value);
+    if (!value)
+      return;
+    LLVMBuildStore(ctx->builder, value, field_ptr);
+    return;
+  }
+
+  codegen_error(ctx, "Invalid assignment target");
 }
 
 void codegen_defer(CodeGenContext *ctx, ASTNode *stmt) {
@@ -288,11 +331,13 @@ void codegen_function(CodeGenContext *ctx, ASTNode *func) {
 }
 
 void codegen_struct(CodeGenContext *ctx, ASTNode *sd) {
-  LLVMTypeRef *fts = malloc(sizeof(LLVMTypeRef) * sd->struct_def.field_count);
-  for (int i = 0; i < sd->struct_def.field_count; i++)
+  int count = sd->struct_def.field_count;
+  LLVMTypeRef *fts = malloc(sizeof(LLVMTypeRef) * count);
+  for (int i = 0; i < count; i++) {
     fts[i] = codegen_type_from_node(ctx, sd->struct_def.fields[i]);
+  }
   LLVMTypeRef st = LLVMStructCreateNamed(ctx->llvm_ctx, sd->struct_def.name);
-  LLVMStructSetBody(st, fts, sd->struct_def.field_count, 0);
+  LLVMStructSetBody(st, fts, count, 0);
   if (ctx->struct_types.count >= ctx->struct_types.capacity) {
     ctx->struct_types.capacity =
         ctx->struct_types.capacity ? ctx->struct_types.capacity * 2 : 16;
@@ -304,12 +349,19 @@ void codegen_struct(CodeGenContext *ctx, ASTNode *sd) {
     ctx->struct_types.field_counts =
         realloc(ctx->struct_types.field_counts,
                 ctx->struct_types.capacity * sizeof(int));
+    ctx->struct_types.field_names =
+        realloc(ctx->struct_types.field_names,
+                ctx->struct_types.capacity * sizeof(char **));
   }
-  ctx->struct_types.names[ctx->struct_types.count] =
-      strdup(sd->struct_def.name);
-  ctx->struct_types.types[ctx->struct_types.count] = st;
-  ctx->struct_types.field_counts[ctx->struct_types.count] =
-      sd->struct_def.field_count;
+  int index = ctx->struct_types.count;
+  ctx->struct_types.names[index] = strdup(sd->struct_def.name);
+  ctx->struct_types.types[index] = st;
+  ctx->struct_types.field_counts[index] = count;
+  ctx->struct_types.field_names[index] = malloc(sizeof(char *) * count);
+  for (int i = 0; i < count; i++) {
+    ctx->struct_types.field_names[index][i] =
+        strdup(sd->struct_def.field_names[i]);
+  }
   ctx->struct_types.count++;
   free(fts);
 }
@@ -317,20 +369,54 @@ void codegen_struct(CodeGenContext *ctx, ASTNode *sd) {
 void codegen_enum(CodeGenContext *ctx, ASTNode *ed) {
   if (!ed || !ed->enum_def.name)
     return;
+
+  int64_t next_int = 0;
+  bool prev_is_int = true;
+
   for (int i = 0; i < ed->enum_def.value_count; i++) {
     if (!ed->enum_def.values || !ed->enum_def.values[i])
       continue;
+
     char *nm =
         malloc(strlen(ed->enum_def.name) + strlen(ed->enum_def.values[i]) + 2);
     sprintf(nm, "%s_%s", ed->enum_def.name, ed->enum_def.values[i]);
-    int64_t v = i;
-    if (ed->enum_def.value_exprs && ed->enum_def.value_exprs[i] &&
-        ed->enum_def.value_exprs[i]->type == NODE_INT_LITERAL)
-      v = ed->enum_def.value_exprs[i]->int_lit.value;
-    LLVMValueRef g =
-        LLVMAddGlobal(ctx->module, LLVMInt64TypeInContext(ctx->llvm_ctx), nm);
-    LLVMSetInitializer(
-        g, LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), v, 0));
+
+    ASTNode *expr =
+        ed->enum_def.value_exprs ? ed->enum_def.value_exprs[i] : NULL;
+
+    LLVMValueRef init;
+    LLVMTypeRef gtype;
+
+    if (expr) {
+      init = codegen_expr(ctx, expr);
+      gtype = LLVMTypeOf(init);
+
+      if (LLVMGetTypeKind(gtype) == LLVMIntegerTypeKind) {
+        if (!LLVMIsConstant(init)) {
+          codegen_error(
+              ctx, "Enum value for '%s.%s' must be a compile-time constant",
+              ed->enum_def.name, ed->enum_def.values[i]);
+          free(nm);
+          continue;
+        }
+        next_int = LLVMConstIntGetSExtValue(init) + 1;
+        prev_is_int = true;
+      } else {
+        prev_is_int = false;
+      }
+    } else if (prev_is_int) {
+      gtype = LLVMInt64TypeInContext(ctx->llvm_ctx);
+      init = LLVMConstInt(gtype, next_int, 0);
+      next_int++;
+    } else {
+      gtype = LLVMInt64TypeInContext(ctx->llvm_ctx);
+      init = LLVMConstInt(gtype, 0, 0);
+      next_int = 1;
+      prev_is_int = true;
+    }
+
+    LLVMValueRef g = LLVMAddGlobal(ctx->module, gtype, nm);
+    LLVMSetInitializer(g, init);
     LLVMSetLinkage(g, LLVMInternalLinkage);
     LLVMSetGlobalConstant(g, true);
     free(nm);

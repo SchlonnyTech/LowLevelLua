@@ -1,3 +1,4 @@
+function main(): int
 print("For loop:")
 for i = 1, 5 do
     print(i)
@@ -16,3 +17,5 @@ repeat
     num = num * 2
 until num > 100
 print(num)
+return 0
+end

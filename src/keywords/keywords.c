@@ -6,10 +6,12 @@
 
 static KeywordHandler registered[MAX_KEYWORDS];
 static int registered_count = 0;
+static bool keywords_initialized = false;
 
 KeywordHandler keyword_handlers[] = {
     {NULL, NULL, NULL, 0},
 };
+
 void register_keyword_handler(KeywordHandler *handler) {
   if (registered_count < MAX_KEYWORDS) {
     registered[registered_count] = *handler;
@@ -25,9 +27,6 @@ void codegen_keyword_c(FILE *out, ASTNode *node) {
   (void)out;
   (void)node;
 }
-#include "keywords.h"
-
-static bool keywords_initialized = false;
 
 void init_keywords(void) {
   if (keywords_initialized)

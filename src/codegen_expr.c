@@ -1,6 +1,5 @@
 #include "codegen.h"
 #include "keywords.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,30 +29,49 @@ LLVMValueRef codegen_variable(CodeGenContext *ctx, ASTNode *expr) {
     return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
   }
   LLVMTypeRef elem_type = codegen_scope_get_type(ctx, expr->variable.name);
-  if (!elem_type) {
+  if (!elem_type)
     elem_type = LLVMInt64TypeInContext(ctx->llvm_ctx);
-  }
-  if (LLVMGetTypeKind(elem_type) == LLVMArrayTypeKind) {
+  if (LLVMGetTypeKind(elem_type) == LLVMArrayTypeKind)
     return var;
-  }
   return LLVMBuildLoad2(ctx->builder, elem_type, var, expr->variable.name);
 }
 
 LLVMValueRef codegen_field_access(CodeGenContext *ctx, ASTNode *expr) {
-  if (!expr || !expr->field_access.object || !expr->field_access.field)
-    return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
-  if (expr->field_access.object->type == NODE_VARIABLE) {
-    const char *en = expr->field_access.object->variable.name;
-    const char *fn = expr->field_access.field;
-    char *nm = malloc(strlen(en) + strlen(fn) + 2);
-    sprintf(nm, "%s_%s", en, fn);
-    LLVMValueRef g = LLVMGetNamedGlobal(ctx->module, nm);
-    free(nm);
-    if (g)
-      return LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->llvm_ctx),
-                            g, "enum");
+  if (!expr || !expr->field_access.object || !expr->field_access.field) {
+    codegen_error(ctx, "Invalid field access");
+    return LLVMConstNull(LLVMInt64TypeInContext(ctx->llvm_ctx));
   }
-  return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+  ASTNode *object = expr->field_access.object;
+  const char *field_name = expr->field_access.field;
+
+  if (object->type != NODE_VARIABLE) {
+    codegen_error(ctx, "Struct field access currently requires a variable");
+    return LLVMConstNull(LLVMInt64TypeInContext(ctx->llvm_ctx));
+  }
+  LLVMValueRef object_ptr = codegen_scope_get(ctx, object->variable.name);
+  LLVMTypeRef object_type = codegen_scope_get_type(ctx, object->variable.name);
+  if (!object_ptr) {
+    codegen_error(ctx, "Undefined variable '%s'", object->variable.name);
+    return LLVMConstNull(LLVMInt64TypeInContext(ctx->llvm_ctx));
+  }
+  if (!object_type || LLVMGetTypeKind(object_type) != LLVMStructTypeKind) {
+    codegen_error(ctx, "Variable '%s' is not a struct", object->variable.name);
+    return LLVMConstNull(LLVMInt64TypeInContext(ctx->llvm_ctx));
+  }
+  int field_index = codegen_struct_field_index(ctx, object_type, field_name);
+  if (field_index < 0) {
+    codegen_error(ctx, "Unknown field '%s' in struct", field_name);
+    return LLVMConstNull(LLVMInt64TypeInContext(ctx->llvm_ctx));
+  }
+  LLVMValueRef zero = LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), 0, 0);
+  LLVMValueRef index =
+      LLVMConstInt(LLVMInt32TypeInContext(ctx->llvm_ctx), field_index, 0);
+  LLVMValueRef indices[] = {zero, index};
+  LLVMTypeRef field_type = LLVMStructGetTypeAtIndex(object_type, field_index);
+  LLVMValueRef field_ptr =
+      LLVMBuildGEP2(ctx->builder, object_type, object_ptr, indices, 2, "field");
+
+  return LLVMBuildLoad2(ctx->builder, field_type, field_ptr, "field.value");
 }
 
 LLVMValueRef codegen_table(CodeGenContext *ctx, ASTNode *expr) {
@@ -74,16 +92,44 @@ LLVMValueRef codegen_table(CodeGenContext *ctx, ASTNode *expr) {
   return arr;
 }
 
+static const char *llvm_type_name(CodeGenContext *ctx, LLVMTypeRef t) {
+  if (!t)
+    return "unknown";
+  switch (LLVMGetTypeKind(t)) {
+  case LLVMIntegerTypeKind:
+    if (t == LLVMInt1TypeInContext(ctx->llvm_ctx))
+      return "bool";
+    return "int";
+  case LLVMDoubleTypeKind:
+    return "float";
+  case LLVMFloatTypeKind:
+    return "float32";
+  case LLVMPointerTypeKind:
+    return "string";
+  case LLVMVoidTypeKind:
+    return "void";
+  case LLVMArrayTypeKind:
+    return "array";
+  case LLVMStructTypeKind:
+    return "struct";
+  default:
+    return "unknown";
+  }
+}
+
 LLVMValueRef codegen_binary_op(CodeGenContext *ctx, ASTNode *expr) {
   const char *op = expr->binary.op;
   if (!op)
     return codegen_expr(ctx, expr->binary.left);
+
   if (strcmp(op, "[]") == 0) {
     LLVMValueRef arr = codegen_expr(ctx, expr->binary.left);
     LLVMValueRef idx;
     if (expr->binary.right->type == NODE_INT_LITERAL) {
       idx = LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx),
                          expr->binary.right->int_lit.value - 1, 0);
+    } else {
+      idx = codegen_expr(ctx, expr->binary.right);
     }
 
     if (expr->binary.left->type == NODE_VARIABLE) {
@@ -114,6 +160,7 @@ LLVMValueRef codegen_binary_op(CodeGenContext *ctx, ASTNode *expr) {
     return LLVMBuildLoad2(ctx->builder, LLVMInt64TypeInContext(ctx->llvm_ctx),
                           ep, "v");
   }
+
   if (strcmp(op, "..") == 0) {
     LLVMValueRef l = codegen_expr(ctx, expr->binary.left);
     LLVMValueRef r = codegen_expr(ctx, expr->binary.right);
@@ -157,29 +204,85 @@ LLVMValueRef codegen_binary_op(CodeGenContext *ctx, ASTNode *expr) {
 
   LLVMValueRef l = codegen_expr(ctx, expr->binary.left);
   LLVMValueRef r = codegen_expr(ctx, expr->binary.right);
+  LLVMTypeRef l_type = LLVMTypeOf(l);
+  LLVMTypeRef r_type = LLVMTypeOf(r);
+  int l_is_str = LLVMGetTypeKind(l_type) == LLVMPointerTypeKind;
+  int r_is_str = LLVMGetTypeKind(r_type) == LLVMPointerTypeKind;
 
-  if (strcmp(op, "+") == 0)
+  if ((strcmp(op, "==") == 0 || strcmp(op, "!=") == 0) && l_is_str &&
+      r_is_str) {
+    LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+    LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->llvm_ctx);
+    LLVMTypeRef strcmp_type =
+        LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p, i8p}, 2, 0);
+    LLVMValueRef strcmp_fn = LLVMGetNamedFunction(ctx->module, "strcmp");
+    if (!strcmp_fn)
+      strcmp_fn = LLVMAddFunction(ctx->module, "strcmp", strcmp_type);
+    LLVMValueRef cargs[] = {l, r};
+    LLVMValueRef cmp = LLVMBuildCall2(ctx->builder, strcmp_type, strcmp_fn,
+                                      cargs, 2, "strcmp");
+    LLVMValueRef zero = LLVMConstInt(i32t, 0, 0);
+    if (strcmp(op, "==") == 0)
+      return LLVMBuildICmp(ctx->builder, LLVMIntEQ, cmp, zero, "streq");
+    else
+      return LLVMBuildICmp(ctx->builder, LLVMIntNE, cmp, zero, "strne");
+  }
+
+  if (l_is_str || r_is_str) {
+    codegen_error(ctx,
+                  "type mismatch in operator '%s': left is '%s', right is '%s'",
+                  op, llvm_type_name(ctx, l_type), llvm_type_name(ctx, r_type));
+    return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+  }
+
+  if (strcmp(op, "+") == 0) {
+    if (LLVMGetTypeKind(l_type) == LLVMDoubleTypeKind ||
+        LLVMGetTypeKind(r_type) == LLVMDoubleTypeKind)
+      return LLVMBuildFAdd(ctx->builder, l, r, "fa");
     return LLVMBuildAdd(ctx->builder, l, r, "a");
-  if (strcmp(op, "-") == 0)
+  }
+  if (strcmp(op, "-") == 0) {
+    if (LLVMGetTypeKind(l_type) == LLVMDoubleTypeKind ||
+        LLVMGetTypeKind(r_type) == LLVMDoubleTypeKind)
+      return LLVMBuildFSub(ctx->builder, l, r, "fs");
     return LLVMBuildSub(ctx->builder, l, r, "s");
-  if (strcmp(op, "*") == 0)
+  }
+  if (strcmp(op, "*") == 0) {
+    if (LLVMGetTypeKind(l_type) == LLVMDoubleTypeKind ||
+        LLVMGetTypeKind(r_type) == LLVMDoubleTypeKind)
+      return LLVMBuildFMul(ctx->builder, l, r, "fm");
     return LLVMBuildMul(ctx->builder, l, r, "m");
-  if (strcmp(op, "/") == 0)
+  }
+  if (strcmp(op, "/") == 0) {
+    if (LLVMGetTypeKind(l_type) == LLVMDoubleTypeKind ||
+        LLVMGetTypeKind(r_type) == LLVMDoubleTypeKind)
+      return LLVMBuildFDiv(ctx->builder, l, r, "fd");
     return LLVMBuildSDiv(ctx->builder, l, r, "d");
+  }
   if (strcmp(op, "%") == 0)
     return LLVMBuildSRem(ctx->builder, l, r, "mod");
+
+  int is_float = LLVMGetTypeKind(l_type) == LLVMDoubleTypeKind ||
+                 LLVMGetTypeKind(r_type) == LLVMDoubleTypeKind;
+
   if (strcmp(op, "==") == 0)
-    return LLVMBuildICmp(ctx->builder, LLVMIntEQ, l, r, "e");
+    return is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOEQ, l, r, "e")
+                    : LLVMBuildICmp(ctx->builder, LLVMIntEQ, l, r, "e");
   if (strcmp(op, "!=") == 0)
-    return LLVMBuildICmp(ctx->builder, LLVMIntNE, l, r, "ne");
+    return is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealONE, l, r, "ne")
+                    : LLVMBuildICmp(ctx->builder, LLVMIntNE, l, r, "ne");
   if (strcmp(op, "<") == 0)
-    return LLVMBuildICmp(ctx->builder, LLVMIntSLT, l, r, "lt");
+    return is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOLT, l, r, "lt")
+                    : LLVMBuildICmp(ctx->builder, LLVMIntSLT, l, r, "lt");
   if (strcmp(op, "<=") == 0)
-    return LLVMBuildICmp(ctx->builder, LLVMIntSLE, l, r, "le");
+    return is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOLE, l, r, "le")
+                    : LLVMBuildICmp(ctx->builder, LLVMIntSLE, l, r, "le");
   if (strcmp(op, ">") == 0)
-    return LLVMBuildICmp(ctx->builder, LLVMIntSGT, l, r, "gt");
+    return is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOGT, l, r, "gt")
+                    : LLVMBuildICmp(ctx->builder, LLVMIntSGT, l, r, "gt");
   if (strcmp(op, ">=") == 0)
-    return LLVMBuildICmp(ctx->builder, LLVMIntSGE, l, r, "ge");
+    return is_float ? LLVMBuildFCmp(ctx->builder, LLVMRealOGE, l, r, "ge")
+                    : LLVMBuildICmp(ctx->builder, LLVMIntSGE, l, r, "ge");
   if (strcmp(op, "and") == 0)
     return LLVMBuildAnd(ctx->builder, l, r, "and");
   if (strcmp(op, "or") == 0)
@@ -233,6 +336,82 @@ LLVMValueRef codegen_asm(CodeGenContext *ctx, ASTNode *expr) {
   return LLVMBuildCall2(ctx->builder, ft, ia, NULL, 0, "asm");
 }
 
+static LLVMValueRef codegen_print(CodeGenContext *ctx, ASTNode *expr) {
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef f64t = LLVMDoubleTypeInContext(ctx->llvm_ctx);
+
+  LLVMTypeRef printf_type =
+      LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, true);
+  LLVMValueRef printf_fn = LLVMGetNamedFunction(ctx->module, "printf");
+  if (!printf_fn)
+    printf_fn = LLVMAddFunction(ctx->module, "printf", printf_type);
+
+  LLVMTypeRef puts_type = LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
+  LLVMValueRef puts_fn = LLVMGetNamedFunction(ctx->module, "puts");
+  if (!puts_fn)
+    puts_fn = LLVMAddFunction(ctx->module, "puts", puts_type);
+
+  LLVMValueRef fmt_int =
+      LLVMBuildGlobalStringPtr(ctx->builder, "%lld\n", "fmt_int");
+  LLVMValueRef fmt_flt =
+      LLVMBuildGlobalStringPtr(ctx->builder, "%f\n", "fmt_flt");
+
+  for (int i = 0; i < expr->call.arg_count; i++) {
+    ASTNode *arg = expr->call.args[i];
+
+    if (arg->type == NODE_VARIABLE) {
+      LLVMTypeRef vt = codegen_scope_get_type(ctx, arg->variable.name);
+      if (vt && LLVMGetTypeKind(vt) == LLVMArrayTypeKind) {
+        LLVMValueRef arr = codegen_variable(ctx, arg);
+        int count = LLVMGetArrayLength(vt);
+        for (int j = 0; j < count; j++) {
+          LLVMValueRef idx = LLVMConstInt(i64t, j, 0);
+          LLVMValueRef z = LLVMConstInt(i64t, 0, 0);
+          LLVMValueRef ep = LLVMBuildGEP2(ctx->builder, vt, arr,
+                                          (LLVMValueRef[]){z, idx}, 2, "e");
+          LLVMValueRef val = LLVMBuildLoad2(ctx->builder, i64t, ep, "v");
+          LLVMValueRef is_str =
+              LLVMBuildICmp(ctx->builder, LLVMIntSLT, val,
+                            LLVMConstInt(i64t, 0, 0), "is_str");
+          LLVMValueRef mask = LLVMConstInt(i64t, 0x7FFFFFFFFFFFFFFFULL, 0);
+          LLVMValueRef ptr_val = LLVMBuildAnd(ctx->builder, val, mask, "clear");
+          LLVMValueRef str_ptr =
+              LLVMBuildIntToPtr(ctx->builder, ptr_val, i8p, "sp");
+          LLVMValueRef int_ptr =
+              LLVMBuildIntToPtr(ctx->builder, val, i8p, "ip");
+          LLVMValueRef selected =
+              LLVMBuildSelect(ctx->builder, is_str, str_ptr, int_ptr, "sel");
+          LLVMValueRef sa[] = {selected};
+          LLVMBuildCall2(ctx->builder, puts_type, puts_fn, sa, 1, "p");
+        }
+        continue;
+      }
+    }
+
+    LLVMValueRef val = codegen_expr(ctx, arg);
+    LLVMTypeRef val_type = LLVMTypeOf(val);
+    LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
+
+    if (val_kind == LLVMPointerTypeKind) {
+      LLVMValueRef args[] = {val};
+      LLVMBuildCall2(ctx->builder, puts_type, puts_fn, args, 1, "print");
+    } else if (val_kind == LLVMDoubleTypeKind) {
+      LLVMValueRef args[] = {fmt_flt, val};
+      LLVMBuildCall2(ctx->builder, printf_type, printf_fn, args, 2, "print");
+    } else if (val_kind == LLVMFloatTypeKind) {
+      LLVMValueRef f64 = LLVMBuildFPExt(ctx->builder, val, f64t, "f64");
+      LLVMValueRef args[] = {fmt_flt, f64};
+      LLVMBuildCall2(ctx->builder, printf_type, printf_fn, args, 2, "print");
+    } else {
+      LLVMValueRef args[] = {fmt_int, val};
+      LLVMBuildCall2(ctx->builder, printf_type, printf_fn, args, 2, "print");
+    }
+  }
+  return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+}
+
 LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   const char *name = expr->call.name;
   int bt = llvm_get_builtin_type(ctx, name);
@@ -246,111 +425,15 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
       return builtin_abs(ctx, expr);
   }
 
+  if (strncmp(name, "string.", 7) == 0)
+    return codegen_string_lib(ctx, name, expr);
+
   KeywordHandler *kh = find_keyword(name);
-  if (kh && kh->codegen) {
-    ASTNode *kw_node = ast_create_node(NODE_KEYWORD, expr->line, expr->column);
-    kw_node->keyword.name = strdup(name);
-    kw_node->keyword.args = expr->call.args;
-    kw_node->keyword.arg_count = expr->call.arg_count;
-    return kh->codegen(ctx, NULL, kw_node);
-  }
+  if (kh && kh->codegen)
+    return kh->codegen(ctx, NULL, expr);
 
-  if (strcmp(name, "print") == 0) {
-    for (int i = 0; i < expr->call.arg_count; i++) {
-      ASTNode *arg = expr->call.args[i];
-      LLVMTypeRef i8p =
-          LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
-      LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->llvm_ctx);
-      LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
-
-      if (arg->type == NODE_VARIABLE) {
-        LLVMTypeRef vt = codegen_scope_get_type(ctx, arg->variable.name);
-        if (vt && LLVMGetTypeKind(vt) == LLVMArrayTypeKind) {
-          LLVMValueRef arr = codegen_variable(ctx, arg);
-          int count = LLVMGetArrayLength(vt);
-
-          for (int j = 0; j < count; j++) {
-            LLVMValueRef idx = LLVMConstInt(i64t, j, 0);
-            LLVMValueRef z = LLVMConstInt(i64t, 0, 0);
-            LLVMValueRef ep = LLVMBuildGEP2(ctx->builder, vt, arr,
-                                            (LLVMValueRef[]){z, idx}, 2, "e");
-            LLVMValueRef val = LLVMBuildLoad2(ctx->builder, i64t, ep, "v");
-
-            LLVMValueRef is_str =
-                LLVMBuildICmp(ctx->builder, LLVMIntSLT, val,
-                              LLVMConstInt(i64t, 0, 0), "is_str");
-            LLVMValueRef mask = LLVMConstInt(i64t, 0x7FFFFFFFFFFFFFFFULL, 0);
-            LLVMValueRef ptr_val =
-                LLVMBuildAnd(ctx->builder, val, mask, "clear");
-            LLVMValueRef str_ptr =
-                LLVMBuildIntToPtr(ctx->builder, ptr_val, i8p, "sp");
-            LLVMValueRef int_ptr =
-                LLVMBuildIntToPtr(ctx->builder, val, i8p, "ip");
-            LLVMValueRef selected =
-                LLVMBuildSelect(ctx->builder, is_str, str_ptr, int_ptr, "sel");
-
-            LLVMTypeRef putst =
-                LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
-            LLVMValueRef putf = LLVMGetNamedFunction(ctx->module, "puts");
-            if (!putf)
-              putf = LLVMAddFunction(ctx->module, "puts", putst);
-            LLVMValueRef sa[] = {selected};
-            LLVMBuildCall2(ctx->builder, putst, putf, sa, 1, "p");
-          }
-          continue;
-        }
-      }
-
-      if (arg->type == NODE_BINARY_OP && arg->binary.op &&
-          strcmp(arg->binary.op, "[]") == 0) {
-        LLVMValueRef val = codegen_expr(ctx, arg);
-        LLVMValueRef is_str = LLVMBuildICmp(ctx->builder, LLVMIntSLT, val,
-                                            LLVMConstInt(i64t, 0, 0), "is_str");
-        LLVMValueRef mask = LLVMConstInt(i64t, 0x7FFFFFFFFFFFFFFFULL, 0);
-        LLVMValueRef ptr_val = LLVMBuildAnd(ctx->builder, val, mask, "clear");
-        LLVMValueRef str_ptr =
-            LLVMBuildIntToPtr(ctx->builder, ptr_val, i8p, "sp");
-        LLVMValueRef int_ptr = LLVMBuildIntToPtr(ctx->builder, val, i8p, "ip");
-        LLVMValueRef selected =
-            LLVMBuildSelect(ctx->builder, is_str, str_ptr, int_ptr, "sel");
-
-        LLVMTypeRef putst = LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
-        LLVMValueRef putf = LLVMGetNamedFunction(ctx->module, "puts");
-        if (!putf)
-          putf = LLVMAddFunction(ctx->module, "puts", putst);
-        LLVMValueRef sa[] = {selected};
-        LLVMBuildCall2(ctx->builder, putst, putf, sa, 1, "p");
-        continue;
-      }
-
-      LLVMValueRef val = codegen_expr(ctx, arg);
-      LLVMTypeRef val_type = LLVMTypeOf(val);
-      LLVMTypeKind val_kind = LLVMGetTypeKind(val_type);
-
-      if (val_kind == LLVMPointerTypeKind) {
-        LLVMTypeRef putst = LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p}, 1, 0);
-        LLVMValueRef putf = LLVMGetNamedFunction(ctx->module, "puts");
-        if (!putf)
-          putf = LLVMAddFunction(ctx->module, "puts", putst);
-        LLVMValueRef args[] = {val};
-        LLVMBuildCall2(ctx->builder, putst, putf, args, 1, "print");
-      } else {
-        LLVMTypeRef pt =
-            LLVMFunctionType(i32t, (LLVMTypeRef[]){i8p, i64t}, 2, 0);
-        LLVMValueRef pf = LLVMGetNamedFunction(ctx->module, "printf");
-        if (!pf)
-          pf = LLVMAddFunction(ctx->module, "printf", pt);
-        LLVMBasicBlockRef saved = LLVMGetInsertBlock(ctx->builder);
-        LLVMValueRef fmt =
-            LLVMBuildGlobalStringPtr(ctx->builder, "%lld\n", "fmt");
-        if (saved)
-          LLVMPositionBuilderAtEnd(ctx->builder, saved);
-        LLVMValueRef args[] = {fmt, val};
-        LLVMBuildCall2(ctx->builder, pt, pf, args, 2, "print");
-      }
-    }
-    return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
-  }
+  if (strcmp(name, "print") == 0)
+    return codegen_print(ctx, expr);
 
   LLVMValueRef func = NULL;
   LLVMTypeRef ft = NULL;
@@ -363,13 +446,14 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   }
 
   if (!func) {
-    LLVMValueRef *args = malloc(sizeof(LLVMValueRef) * expr->call.arg_count);
+    LLVMValueRef *call_args =
+        malloc(sizeof(LLVMValueRef) * expr->call.arg_count);
     LLVMTypeRef *param_types =
         malloc(sizeof(LLVMTypeRef) * expr->call.arg_count);
 
     for (int i = 0; i < expr->call.arg_count; i++) {
-      args[i] = codegen_expr(ctx, expr->call.args[i]);
-      param_types[i] = LLVMTypeOf(args[i]);
+      call_args[i] = codegen_expr(ctx, expr->call.args[i]);
+      param_types[i] = LLVMTypeOf(call_args[i]);
     }
 
     LLVMTypeRef return_type = LLVMInt64TypeInContext(ctx->llvm_ctx);
@@ -378,9 +462,9 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
     func = LLVMAddFunction(ctx->module, name, ft);
     LLVMSetLinkage(func, LLVMExternalLinkage);
 
-    LLVMValueRef result = LLVMBuildCall2(ctx->builder, ft, func, args,
+    LLVMValueRef result = LLVMBuildCall2(ctx->builder, ft, func, call_args,
                                          expr->call.arg_count, "call");
-    free(args);
+    free(call_args);
     free(param_types);
     return result;
   }
@@ -389,13 +473,13 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   if (LLVMGetTypeKind(ft) == LLVMPointerTypeKind)
     call_type = LLVMGetElementType(ft);
 
-  LLVMValueRef *args = malloc(sizeof(LLVMValueRef) * expr->call.arg_count);
+  LLVMValueRef *call_args = malloc(sizeof(LLVMValueRef) * expr->call.arg_count);
   for (int i = 0; i < expr->call.arg_count; i++)
-    args[i] = codegen_expr(ctx, expr->call.args[i]);
+    call_args[i] = codegen_expr(ctx, expr->call.args[i]);
 
-  LLVMValueRef result = LLVMBuildCall2(ctx->builder, call_type, func, args,
+  LLVMValueRef result = LLVMBuildCall2(ctx->builder, call_type, func, call_args,
                                        expr->call.arg_count, "call");
-  free(args);
+  free(call_args);
   return result;
 }
 

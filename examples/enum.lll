@@ -5,13 +5,15 @@ enum Color
 end
 
 enum Direction
-    NORTH
+    NORTH = "North"
     SOUTH
     EAST
     WEST
 end
-
+function main(): int
 local my_color: int = Color.RED
-print(my_color) --RED
+print(my_color) --RED 1
 print(Color.GREEN) --2
 print(Direction.NORTH) --NORTH
+return 0
+end

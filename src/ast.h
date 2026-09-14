@@ -41,7 +41,9 @@ typedef enum {
   NODE_ADDRESS_OF,
   NODE_TYPE_ANNOTATION,
   NODE_KEYWORD,
-  NODE_EXPORT
+  NODE_EXPORT,
+  NODE_EXTERN_LIBRARY,
+  NODE_EXTERN_FUNCTION
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -61,6 +63,20 @@ typedef struct {
   bool is_local;
   bool is_exported;
 } FunctionNode;
+
+typedef struct {
+  char *path;
+  char *alias;
+} ExternLibrary;
+
+typedef struct {
+  char *library;
+  char *name;
+  char *symbol;
+  ASTNode **param_types;
+  int param_count;
+  ASTNode *return_type;
+} ExternFunction;
 
 typedef struct {
   char *name;
@@ -238,6 +254,8 @@ struct ASTNode {
     BinaryOpNode binary;
     UnaryOpNode unary;
     AssignNode assign;
+    ExternLibrary extern_library;
+    ExternFunction extern_function;
     ReturnNode return_stmt;
     IfNode if_stmt;
     WhileNode while_stmt;

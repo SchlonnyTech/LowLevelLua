@@ -46,7 +46,7 @@ static const Keyword keywords[] = {
     {"type", 4, TOKEN_TYPE_KW},
     {"export", 6, TOKEN_EXPORT},
     {"typeof", 6, TOKEN_TYPEOF},
-    {"string", 6, TOKEN_TYPE_STRING},
+    //  {"string", 6, TOKEN_TYPE_STRING},
     {"boolean", 7, TOKEN_TYPE_BOOLEAN},
     {"number", 6, TOKEN_TYPE_NUMBER},
     {"thread", 6, TOKEN_TYPE_THREAD},
@@ -237,12 +237,17 @@ static Token lexer_read_string(Lexer *lex) {
   lexer_advance(lex);
 
   if (lexer_current(lex) == '[') {
-    int eq_count = 0;
+    int save_pos = lex->pos;
+    int save_line = lex->line;
+    int save_col = lex->column;
+
     lexer_advance(lex);
+    int eq_count = 0;
     while (lexer_current(lex) == '=') {
       eq_count++;
       lexer_advance(lex);
     }
+
     if (lexer_current(lex) == '[') {
       lexer_advance(lex);
       int cap = 256, len = 0;
@@ -282,6 +287,10 @@ static Token lexer_read_string(Lexer *lex) {
       free(buf);
       return tok;
     }
+
+    lex->pos = save_pos;
+    lex->line = save_line;
+    lex->column = save_col;
   }
 
   int cap = 256, len = 0;
@@ -441,6 +450,40 @@ static Token lexer_read_ident(Lexer *lex) {
     lexer_advance(lex);
   }
   buf[i] = '\0';
+
+  if (strcmp(buf, "string") == 0 && lexer_current(lex) == '.') {
+    int save_pos = lex->pos;
+    int save_line = lex->line;
+    int save_col = lex->column;
+    char combined[256];
+    strcpy(combined, buf);
+    int ci = i;
+    if (ci < 255)
+      combined[ci++] = lexer_current(lex);
+    lexer_advance(lex);
+    while (isalnum(lexer_current(lex)) || lexer_current(lex) == '_') {
+      if (ci < 255)
+        combined[ci++] = lexer_current(lex);
+      lexer_advance(lex);
+    }
+    combined[ci] = '\0';
+
+    if (strcmp(combined, "string.len") == 0 ||
+        strcmp(combined, "string.sub") == 0 ||
+        strcmp(combined, "string.find") == 0 ||
+        strcmp(combined, "string.upper") == 0 ||
+        strcmp(combined, "string.lower") == 0 ||
+        strcmp(combined, "string.byte") == 0 ||
+        strcmp(combined, "string.char") == 0 ||
+        strcmp(combined, "string.to_int") == 0 ||
+        strcmp(combined, "string.to_float") == 0 ||
+        strcmp(combined, "string.format") == 0) {
+      return make_token(TOKEN_IDENT, combined, line, col);
+    }
+    lex->pos = save_pos;
+    lex->line = save_line;
+    lex->column = save_col;
+  }
 
   for (int k = 0; keywords[k].name; k++) {
     if (i == keywords[k].len && memcmp(buf, keywords[k].name, i) == 0) {

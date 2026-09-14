@@ -2,7 +2,7 @@ struct Point
     x: float64
     y: float64
 end
-
+function main(): int
 local p1: Point
 p1.x = 10.5
 p1.y = 20.3
@@ -10,3 +10,5 @@ p1.y = 20.3
 print("Point created")
 print(p1.x)
 print(p1.y)
+return 0
+end

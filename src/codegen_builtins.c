@@ -2,6 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+void llvm_register_string_builtins(CodeGenContext *ctx) {
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef f64 = LLVMDoubleTypeInContext(ctx->llvm_ctx);
+
+  LLVMTypeRef atoll_type = LLVMFunctionType(i64, (LLVMTypeRef[]){i8p}, 1, 0);
+  LLVMAddFunction(ctx->module, "atoll", atoll_type);
+
+  LLVMTypeRef atof_type = LLVMFunctionType(f64, (LLVMTypeRef[]){i8p}, 1, 0);
+  LLVMAddFunction(ctx->module, "atof", atof_type);
+}
+
 void llvm_register_builtins(CodeGenContext *ctx) {
   ctx->functions.capacity = 256;
   ctx->functions.names = calloc(ctx->functions.capacity, sizeof(char *));
@@ -90,6 +102,7 @@ void llvm_register_builtins(CodeGenContext *ctx) {
   ctx->functions.builtin_types[ctx->functions.count] = BUILTIN_CUSTOM;
   ctx->functions.arg_counts[ctx->functions.count] = 1;
   ctx->functions.count++;
+  llvm_register_string_builtins(ctx);
 }
 
 int llvm_get_builtin_type(CodeGenContext *ctx, const char *name) {

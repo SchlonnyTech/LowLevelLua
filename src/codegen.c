@@ -43,6 +43,22 @@ static void init_string_pool_hash(CodeGenContext *ctx) {
   string_pool_hash = calloc(string_pool_hash_size, sizeof(StringPoolEntry *));
 }
 
+int codegen_struct_field_index(CodeGenContext *ctx, LLVMTypeRef struct_type,
+                               const char *field_name) {
+  for (int i = 0; i < ctx->struct_types.count; i++) {
+    if (ctx->struct_types.types[i] != struct_type)
+      continue;
+    int count = ctx->struct_types.field_counts[i];
+    for (int j = 0; j < count; j++) {
+      if (strcmp(ctx->struct_types.field_names[i][j], field_name) == 0) {
+        return j;
+      }
+    }
+    return -1;
+  }
+  return -1;
+}
+
 void codegen_init(CodeGenContext *ctx, const char *module_name,
                   BuildType build_type) {
   memset(ctx, 0, sizeof(*ctx));
@@ -173,15 +189,18 @@ LLVMTypeRef codegen_type_from_string(CodeGenContext *ctx,
   else {
     for (int i = 0; i < ctx->struct_types.count; i++) {
       if (strcmp(ctx->struct_types.names[i], type_name) == 0) {
-        type = LLVMPointerType(ctx->struct_types.types[i], 0);
+        type = ctx->struct_types.types[i];
+
         entry = malloc(sizeof(TypeCacheEntry));
         entry->key = strdup(type_name);
         entry->type = type;
         entry->next = type_cache[hash];
         type_cache[hash] = entry;
+
         return type;
       }
     }
+
     type = LLVMInt64TypeInContext(ctx->llvm_ctx);
   }
 
