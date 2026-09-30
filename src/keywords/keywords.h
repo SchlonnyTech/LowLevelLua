@@ -1,8 +1,8 @@
 #ifndef KEYWORDS_H
 #define KEYWORDS_H
 
-#include "ast.h"
-#include "codegen.h"
+#include "../ast.h"
+#include "../codegen.h"
 #include <stdbool.h>
 #include <stdio.h>
 

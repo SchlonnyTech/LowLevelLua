@@ -126,7 +126,7 @@ static char *basename_no_ext(const char *p) {
   b = b ? b + 1 : p;
   const char *d = strrchr(b, '.');
   if (d) {
-    int n = d - b;
+    int n = (int)(d - b);
     char *r = malloc(n + 1);
     memcpy(r, b, n);
     r[n] = 0;
@@ -152,39 +152,49 @@ static double ms(void) {
   return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
 }
 
-static ASTNode *do_parse(const char *src, int *tok_count) {
+typedef struct {
+  ASTNode *ast;
+  InternPool *pool;
+  int token_count;
+} ParseResult;
+
+static ParseResult do_parse(const char *src) {
+  ParseResult r = {0};
   parser_set_source(src);
 
   Lexer *l = lexer_create(src);
-  int n;
-  Token *t = lexer_tokenize(l, &n);
+  Token *t = lexer_tokenize(l, &r.token_count);
   lexer_destroy(l);
 
-  Parser *p = parser_create(t, n);
-  ASTNode *ast = parser_parse_program(p);
-
-  for (int i = 0; i < n; i++)
-    free(t[i].text);
-  free(t);
+  Parser *p = parser_create(t, r.token_count);
+  r.ast = parser_parse_program(p);
+  r.pool = p->intern;
+  p->intern = NULL;
   parser_destroy(p);
-  *tok_count = n;
 
-  return ast;
+  free(t);
+  return r;
 }
 
 static int run_jit(const char *src, Options *opts) {
-  int tc;
-  ASTNode *ast = do_parse(src, &tc);
-  if (!ast)
+  ParseResult r = do_parse(src);
+  if (!r.ast) {
+    if (r.pool)
+      intern_pool_destroy(r.pool);
     return 1;
+  }
 
   CodeGenContext ctx;
   codegen_init(&ctx, "lll_jit", opts->build_type);
   ctx.verbose = opts->verbose;
 
-  bool success = codegen_generate(&ctx, ast);
+  bool success = codegen_generate(&ctx, r.ast);
   if (!success) {
     fprintf(stderr, "Codegen failed: %s\n", ctx.error_msg);
+    codegen_destroy(&ctx);
+    ast_destroy_pools();
+    if (r.pool)
+      intern_pool_destroy(r.pool);
     return 1;
   }
 
@@ -194,18 +204,24 @@ static int run_jit(const char *src, Options *opts) {
   if (LLVMCreateExecutionEngineForModule(&engine, ctx.module, &error) != 0) {
     fprintf(stderr, "JIT compilation failed: %s\n", error);
     LLVMDisposeMessage(error);
+    if (r.pool)
+      intern_pool_destroy(r.pool);
     return 1;
   }
 
   LLVMValueRef main_func = LLVMGetNamedFunction(ctx.module, "main");
   if (!main_func) {
     fprintf(stderr, "No main function found\n");
+    if (r.pool)
+      intern_pool_destroy(r.pool);
     return 1;
   }
 
   LLVMGenericValueRef result = LLVMRunFunction(engine, main_func, 0, NULL);
   int ret = result ? (int)LLVMGenericValueToInt(result, 0) : 0;
 
+  if (r.pool)
+    intern_pool_destroy(r.pool);
   return ret;
 }
 
@@ -231,9 +247,8 @@ int main(int argc, char **argv) {
   if (opts.verbose)
     banner();
 
-  if (opts.build_mode) {
+  if (opts.build_mode)
     return lllmake_build_from_file(".lllmake", opts.build_type, opts.verbose);
-  }
 
   if (opts.interactive) {
     printf("LLL Interactive Mode (exit to quit)\n\n");
@@ -280,13 +295,15 @@ int main(int argc, char **argv) {
   free(src_dir);
 
   double t_parse_start = ms();
-  int tc;
-  ASTNode *ast = do_parse(src, &tc);
+  ParseResult r = do_parse(src);
   double t_parse_end = ms();
   free(src);
 
-  if (!ast)
+  if (!r.ast) {
+    if (r.pool)
+      intern_pool_destroy(r.pool);
     return 1;
+  }
 
   char *output_base = opts.output_file    ? strdup(opts.output_file)
                       : opts.direct_input ? strdup("lll_out")
@@ -298,13 +315,15 @@ int main(int argc, char **argv) {
   ctx.verbose = opts.verbose;
   ctx.is_module = opts.is_module;
 
-  bool success = codegen_generate(&ctx, ast);
+  bool success = codegen_generate(&ctx, r.ast);
   double t_cg_end = ms();
 
   if (!success) {
     fprintf(stderr, "Codegen failed: %s\n", ctx.error_msg);
     codegen_destroy(&ctx);
     ast_destroy_pools();
+    if (r.pool)
+      intern_pool_destroy(r.pool);
     free(output_base);
     return 1;
   }
@@ -316,7 +335,7 @@ int main(int argc, char **argv) {
 
   if (opts.emit_llvm) {
     LLVMPrintModuleToFile(ctx.module, llvm_file, NULL);
-    print_stats("LLVM IR generated", llvm_file, tc, ms() - t0,
+    print_stats("LLVM IR generated", llvm_file, r.token_count, ms() - t0,
                 t_parse_end - t_parse_start, t_cg_end - t_cg_start,
                 opts.build_type);
   } else {
@@ -327,16 +346,21 @@ int main(int argc, char **argv) {
       free(link_cmd);
 
       if (ret == 0) {
-        print_stats("OK", output_base, tc, ms() - t0,
+        print_stats("OK", output_base, r.token_count, ms() - t0,
                     t_parse_end - t_parse_start, t_cg_end - t_cg_start,
                     opts.build_type);
       } else {
-        print_stats("Linking failed", NULL, tc, ms() - t0,
+        print_stats("Linking failed", NULL, r.token_count, ms() - t0,
                     t_parse_end - t_parse_start, t_cg_end - t_cg_start,
                     opts.build_type);
       }
     }
   }
+
+  codegen_destroy(&ctx);
+  ast_destroy_pools();
+  if (r.pool)
+    intern_pool_destroy(r.pool);
 
   free(output_base);
   free(llvm_file);

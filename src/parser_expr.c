@@ -51,12 +51,92 @@ static inline bool is_assign_op(Parser *p) {
   return false;
 }
 
+static inline OpKind opkind_from_tok(TokenType t) {
+  switch (t) {
+  case TOKEN_PLUS:
+    return OP_ADD;
+  case TOKEN_MINUS:
+    return OP_SUB;
+  case TOKEN_STAR:
+    return OP_MUL;
+  case TOKEN_SLASH:
+    return OP_DIV;
+  case TOKEN_PERCENT:
+    return OP_MOD;
+  case TOKEN_EQ:
+    return OP_EQ;
+  case TOKEN_NEQ:
+    return OP_NE;
+  case TOKEN_LT:
+    return OP_LT;
+  case TOKEN_LTE:
+    return OP_LE;
+  case TOKEN_GT:
+    return OP_GT;
+  case TOKEN_GTE:
+    return OP_GE;
+  case TOKEN_AND:
+    return OP_AND;
+  case TOKEN_OR:
+    return OP_OR;
+  case TOKEN_CONCAT:
+    return OP_RANGE;
+  default:
+    return OP_NONE;
+  }
+}
+
+static ASTNode *binary_make(Parser *p, OpKind k, ASTNode *l, ASTNode *r) {
+  ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
+  n->binary.op = NULL;
+  n->binary.op_kind = k;
+  n->binary.left = l;
+  n->binary.right = r;
+  (void)p;
+  return n;
+}
+
+static TableKind infer_table_kind(ASTNode **fields, int cnt) {
+  if (cnt == 0)
+    return TABLE_DYN;
+  int all_int = 1, all_str = 1, all_float = 1;
+  for (int i = 0; i < cnt; i++) {
+    if (!fields[i]) {
+      all_int = all_str = all_float = 0;
+      break;
+    }
+    NodeType t = fields[i]->type;
+    if (t == NODE_BINARY_OP) {
+      if (fields[i]->binary.op_kind == OP_RANGE) {
+        all_int = all_float = 0;
+      } else {
+        all_str = 0;
+      }
+    } else if (t == NODE_INT_LITERAL) {
+      all_str = all_float = 0;
+    } else if (t == NODE_STRING_LITERAL) {
+      all_int = all_float = 0;
+    } else if (t == NODE_FLOAT_LITERAL) {
+      all_int = all_str = 0;
+    } else {
+      all_int = all_str = all_float = 0;
+    }
+  }
+  if (all_int)
+    return TABLE_INT;
+  if (all_str)
+    return TABLE_STR;
+  if (all_float)
+    return TABLE_FLOAT;
+  return TABLE_DYN;
+}
+
 static ASTNode *parse_call_args(Parser *p, const char *name, int line,
                                 int col) {
   DPRINTF_EXPR("parse_call_args: %s\n", name);
   parser_advance(p);
   ASTNode *n = ast_create_node(NODE_CALL, line, col);
-  n->call.name = string_copy(name);
+  n->call.name = parser_intern(p, name);
   int cap = 8, cnt = 0;
   ASTNode **args = malloc(sizeof(ASTNode *) * cap);
 
@@ -114,19 +194,17 @@ static ASTNode *parse_postfix(Parser *p, ASTNode *base) {
   while (parser_check(p, TOKEN_DOT) || parser_check(p, TOKEN_LBRACK)) {
     if (parser_check(p, TOKEN_DOT)) {
       parser_advance(p);
-      char *field = toktext(p);
+      const char *field = parser_intern(p, toktext(p));
       parser_expect(p, TOKEN_IDENT, "field");
 
       if (parser_check(p, TOKEN_LPAREN)) {
-        char *method_name = string_format(
-            "%s.%s",
+        const char *objname =
             result->type == NODE_VARIABLE       ? result->variable.name
             : result->type == NODE_FIELD_ACCESS ? result->field_access.field
-                                                : "obj",
-            field);
-        result = parse_call_args(p, method_name, base->line, base->column);
-        free(method_name);
-        free(field);
+                                                : "obj";
+        char *mn = string_format("%s.%s", objname, field);
+        result = parse_call_args(p, mn, base->line, base->column);
+        free(mn);
       } else {
         ASTNode *a =
             ast_create_node(NODE_FIELD_ACCESS, base->line, base->column);
@@ -138,11 +216,7 @@ static ASTNode *parse_postfix(Parser *p, ASTNode *base) {
       parser_advance(p);
       ASTNode *index = parse_expression(p);
       parser_expect(p, TOKEN_RBRACK, "]");
-      ASTNode *a = ast_create_node(NODE_BINARY_OP, base->line, base->column);
-      a->binary.op = string_copy("[]");
-      a->binary.left = result;
-      a->binary.right = index;
-      result = a;
+      result = binary_make(p, OP_INDEX, result, index);
     }
   }
 
@@ -153,18 +227,22 @@ static ASTNode *parse_prefix(Parser *p) {
   int line = p->current.line, col = p->current.column;
   DPRINTF_EXPR("parse_prefix: type=%d text='%s'\n", p->current.type,
                p->current.text ? p->current.text : "(null)");
+
   if (parser_check(p, TOKEN_IDENT)) {
     for (int i = 0; keyword_handlers[i].name; i++) {
-      if (strcmp(p->current.text, keyword_handlers[i].name) == 0) {
+      if (p->current.text && keyword_handlers[i].name &&
+          p->current.text == keyword_handlers[i].name)
         return keyword_handlers[i].parse(p, line, col);
-      }
+      if (p->current.text && keyword_handlers[i].name &&
+          strcmp(p->current.text, keyword_handlers[i].name) == 0)
+        return keyword_handlers[i].parse(p, line, col);
     }
   }
 
   switch (p->current.type) {
   case TOKEN_STRING: {
     ASTNode *n = ast_create_node(NODE_STRING_LITERAL, line, col);
-    n->string_lit.value = toktext(p);
+    n->string_lit.value = parser_intern(p, toktext(p));
     parser_advance(p);
     return n;
   }
@@ -206,10 +284,10 @@ static ASTNode *parse_prefix(Parser *p) {
     parser_advance(p);
     ASTNode *n = ast_create_node(NODE_IMPORT, line, col);
     if (parser_check(p, TOKEN_STRING)) {
-      n->import.module_path = toktext(p);
+      n->import.module_path = parser_intern(p, toktext(p));
       parser_advance(p);
     } else {
-      n->import.module_path = toktext(p);
+      n->import.module_path = parser_intern(p, toktext(p));
       parser_expect(p, TOKEN_IDENT, "module name");
     }
     parser_expect(p, TOKEN_RPAREN, ")");
@@ -218,14 +296,11 @@ static ASTNode *parse_prefix(Parser *p) {
   }
 
   if (parser_check(p, TOKEN_IDENT)) {
-    char *name = toktext(p);
+    const char *name = parser_intern(p, toktext(p));
     parser_advance(p);
 
-    if (parser_check(p, TOKEN_LPAREN)) {
-      ASTNode *n = parse_call_args(p, name, line, col);
-      free(name);
-      return n;
-    }
+    if (parser_check(p, TOKEN_LPAREN))
+      return parse_call_args(p, name, line, col);
 
     ASTNode *n = ast_create_node(NODE_VARIABLE, line, col);
     n->variable.name = name;
@@ -242,14 +317,14 @@ static ASTNode *parse_prefix(Parser *p) {
     ASTNode *n = ast_create_node(NODE_TABLE, line, col);
     int cap = 8, cnt = 0;
     ASTNode **fields = malloc(sizeof(ASTNode *) * cap);
-    char **names = malloc(sizeof(char *) * cap);
+    const char **names = malloc(sizeof(const char *) * cap);
 
     if (!parser_check(p, TOKEN_RBRACE)) {
       do {
         if (cnt >= cap) {
           cap *= 2;
           fields = realloc(fields, sizeof(ASTNode *) * cap);
-          names = realloc(names, sizeof(char *) * cap);
+          names = realloc(names, sizeof(const char *) * cap);
         }
 
         if (parser_check(p, TOKEN_LBRACK)) {
@@ -258,27 +333,29 @@ static ASTNode *parse_prefix(Parser *p) {
           parser_expect(p, TOKEN_RBRACK, "]");
           parser_expect(p, TOKEN_EQUALS, "=");
 
+          char tmp[64];
           if (key_expr->type == NODE_INT_LITERAL)
-            names[cnt] =
-                string_format("[%lld]", (long long)key_expr->int_lit.value);
+            snprintf(tmp, sizeof(tmp), "[%lld]",
+                     (long long)key_expr->int_lit.value);
           else if (key_expr->type == NODE_STRING_LITERAL)
-            names[cnt] = string_format("[\"%s\"]", key_expr->string_lit.value);
+            snprintf(tmp, sizeof(tmp), "[\"%s\"]", key_expr->string_lit.value);
           else
-            names[cnt] = string_copy("[expr]");
+            snprintf(tmp, sizeof(tmp), "[expr]");
+          names[cnt] = parser_intern(p, tmp);
 
           fields[cnt] = parse_expression(p);
           cnt++;
         } else if (parser_check(p, TOKEN_IDENT) && peek(p) &&
                    peek(p)->type == TOKEN_EQUALS) {
-          names[cnt] = toktext(p);
+          names[cnt] = parser_intern(p, toktext(p));
           parser_advance(p);
           parser_advance(p);
           fields[cnt] = parse_expression(p);
           cnt++;
         } else {
           char key[16];
-          snprintf(key, 16, "%d", cnt);
-          names[cnt] = string_copy(key);
+          snprintf(key, sizeof(key), "%d", cnt);
+          names[cnt] = parser_intern(p, key);
           fields[cnt] = parse_expression(p);
           cnt++;
         }
@@ -290,6 +367,8 @@ static ASTNode *parse_prefix(Parser *p) {
     n->table.field_count = cnt;
     n->table.fields = fields;
     n->table.field_names = names;
+    n->table.kind = infer_table_kind(fields, cnt);
+    n->table.elem_type = NULL;
     return n;
   }
 
@@ -305,21 +384,21 @@ static ASTNode *parse_prefix(Parser *p) {
 
   if (parser_match(p, TOKEN_FUNCTION)) {
     ASTNode *n = ast_create_node(NODE_FUNCTION, line, col);
-    n->func.name = string_copy("");
+    n->func.name = parser_intern(p, "");
     parser_expect(p, TOKEN_LPAREN, "(");
 
     int cap = 4, cnt = 0;
-    char **params = malloc(sizeof(char *) * cap);
+    const char **params = malloc(sizeof(const char *) * cap);
     ASTNode **types = malloc(sizeof(ASTNode *) * cap);
 
     if (!parser_check(p, TOKEN_RPAREN)) {
       do {
         if (cnt >= cap) {
           cap *= 2;
-          params = realloc(params, sizeof(char *) * cap);
+          params = realloc(params, sizeof(const char *) * cap);
           types = realloc(types, sizeof(ASTNode *) * cap);
         }
-        params[cnt] = toktext(p);
+        params[cnt] = parser_intern(p, toktext(p));
         parser_expect(p, TOKEN_IDENT, "param");
         if (parser_match(p, TOKEN_COLON))
           types[cnt] = parse_type(p);
@@ -367,23 +446,23 @@ static ASTNode *parse_unary(Parser *p) {
   int line = p->current.line, col = p->current.column;
 
   if (is_unary_op(p->current.type)) {
-    char *op_str_val;
+    const char *op_str_val = NULL;
     NodeType node_type = NODE_UNARY_OP;
 
     if (parser_match(p, TOKEN_NOT))
-      op_str_val = string_copy("!");
+      op_str_val = "!";
     else if (parser_match(p, TOKEN_MINUS))
-      op_str_val = string_copy("-");
+      op_str_val = "-";
     else if (parser_match(p, TOKEN_BANG))
-      op_str_val = string_copy("!");
+      op_str_val = "!";
     else if (parser_match(p, TOKEN_STAR)) {
       node_type = NODE_POINTER_DEREF;
-      op_str_val = string_copy("*");
+      op_str_val = "*";
     } else if (parser_match(p, TOKEN_BITAND)) {
       node_type = NODE_ADDRESS_OF;
-      op_str_val = string_copy("&");
+      op_str_val = "&";
     } else if (parser_match(p, TOKEN_SHARP))
-      op_str_val = string_copy("#");
+      op_str_val = "#";
     else
       return parse_prefix(p);
 
@@ -405,16 +484,11 @@ static ASTNode *parse_factor(Parser *p) {
   ASTNode *l = parse_unary(p);
 
   while (is_mul_op(p->current.type)) {
-    char *op_str = toktext(p);
+    TokenType t = p->current.type;
     parser_advance(p);
     ASTNode *r = parse_unary(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = op_str;
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, opkind_from_tok(t), l, r);
   }
-
   return l;
 }
 
@@ -422,16 +496,11 @@ static ASTNode *parse_term(Parser *p) {
   ASTNode *l = parse_factor(p);
 
   while (is_add_op(p->current.type)) {
-    char *op_str = toktext(p);
+    TokenType t = p->current.type;
     parser_advance(p);
     ASTNode *r = parse_factor(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = op_str;
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, opkind_from_tok(t), l, r);
   }
-
   return l;
 }
 
@@ -439,15 +508,9 @@ static ASTNode *parse_concat(Parser *p) {
   ASTNode *l = parse_term(p);
 
   while (parser_match(p, TOKEN_CONCAT)) {
-    char *op_str = string_copy("..");
     ASTNode *r = parse_term(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = op_str;
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, OP_RANGE, l, r);
   }
-
   return l;
 }
 
@@ -455,16 +518,11 @@ static ASTNode *parse_compare(Parser *p) {
   ASTNode *l = parse_concat(p);
 
   while (is_compare_op(p->current.type)) {
-    char *op_str = toktext(p);
+    TokenType t = p->current.type;
     parser_advance(p);
     ASTNode *r = parse_concat(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = op_str;
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, opkind_from_tok(t), l, r);
   }
-
   return l;
 }
 
@@ -472,16 +530,11 @@ static ASTNode *parse_eq(Parser *p) {
   ASTNode *l = parse_compare(p);
 
   while (is_eq_op(p->current.type)) {
-    char *op_str = toktext(p);
+    TokenType t = p->current.type;
     parser_advance(p);
     ASTNode *r = parse_compare(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = op_str;
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, opkind_from_tok(t), l, r);
   }
-
   return l;
 }
 
@@ -491,13 +544,8 @@ static ASTNode *parse_and(Parser *p) {
   while (parser_check(p, TOKEN_AND) || parser_check(p, TOKEN_BITAND)) {
     parser_advance(p);
     ASTNode *r = parse_eq(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = string_copy("&&");
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, OP_AND, l, r);
   }
-
   return l;
 }
 
@@ -507,13 +555,8 @@ static ASTNode *parse_or(Parser *p) {
   while (parser_check(p, TOKEN_OR) || parser_check(p, TOKEN_BITOR)) {
     parser_advance(p);
     ASTNode *r = parse_and(p);
-    ASTNode *n = ast_create_node(NODE_BINARY_OP, l->line, l->column);
-    n->binary.op = string_copy("||");
-    n->binary.left = l;
-    n->binary.right = r;
-    l = n;
+    l = binary_make(p, OP_OR, l, r);
   }
-
   return l;
 }
 
@@ -532,24 +575,24 @@ ASTNode *parse_expression(Parser *p) {
   ASTNode *l = parse_or(p);
 
   if (is_assign_op(p)) {
-    char *op;
+    const char *op;
 
     if (parser_match(p, TOKEN_WALRUS))
-      op = string_copy(":=");
+      op = ":=";
     else if (parser_match(p, TOKEN_EQUALS))
-      op = string_copy("=");
+      op = "=";
     else if (parser_match(p, TOKEN_PLUS) && parser_match(p, TOKEN_EQUALS))
-      op = string_copy("+=");
+      op = "+=";
     else if (parser_match(p, TOKEN_MINUS) && parser_match(p, TOKEN_EQUALS))
-      op = string_copy("-=");
+      op = "-=";
     else if (parser_match(p, TOKEN_STAR) && parser_match(p, TOKEN_EQUALS))
-      op = string_copy("*=");
+      op = "*=";
     else if (parser_match(p, TOKEN_SLASH) && parser_match(p, TOKEN_EQUALS))
-      op = string_copy("/=");
+      op = "/=";
     else if (parser_match(p, TOKEN_PERCENT) && parser_match(p, TOKEN_EQUALS))
-      op = string_copy("%=");
+      op = "%=";
     else
-      op = string_copy("=");
+      op = "=";
 
     ASTNode *n = ast_create_node(NODE_ASSIGN, l->line, l->column);
     n->assign.op = op;
@@ -585,7 +628,7 @@ ASTNode *parse_type(Parser *p) {
 
   for (int i = 0; types[i].name; i++) {
     if (parser_match(p, types[i].tok)) {
-      n->type_annot.type_name = (char *)types[i].name;
+      n->type_annot.type_name = types[i].name;
       while (parser_match(p, TOKEN_STAR))
         n->type_annot.pointer_depth++;
       return n;
@@ -593,7 +636,7 @@ ASTNode *parse_type(Parser *p) {
   }
 
   if (parser_check(p, TOKEN_IDENT)) {
-    n->type_annot.type_name = toktext(p);
+    n->type_annot.type_name = parser_intern(p, toktext(p));
     parser_advance(p);
   }
 

@@ -1,6 +1,5 @@
 #include "keywords/keywords.h"
 #include "parser.h"
-#include "utils.h"
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,20 +20,20 @@ static ASTNode *parse_function_common(Parser *p, int line, int col,
     n->func.name = toktext(p);
     parser_advance(p);
   } else {
-    n->func.name = string_copy("");
+    n->func.name = parser_intern(p, "");
   }
 
   parser_expect(p, TOKEN_LPAREN, "(");
 
   int cap = 4, cnt = 0;
-  char **params = malloc(sizeof(char *) * cap);
+  const char **params = malloc(sizeof(const char *) * cap);
   ASTNode **types = malloc(sizeof(ASTNode *) * cap);
 
   if (!parser_check(p, TOKEN_RPAREN)) {
     do {
       if (cnt >= cap) {
         cap *= 2;
-        params = realloc(params, sizeof(char *) * cap);
+        params = realloc(params, sizeof(const char *) * cap);
         types = realloc(types, sizeof(ASTNode *) * cap);
       }
       params[cnt] = toktext(p);
@@ -156,7 +155,7 @@ static ASTNode *parse_module(Parser *p, int line, int col) {
     n->module.name = toktext(p);
     parser_advance(p);
   } else {
-    n->module.name = string_copy("anonymous");
+    n->module.name = parser_intern(p, "anonymous");
   }
 
   parser_expect(p, TOKEN_LBRACE, "{");
@@ -183,9 +182,8 @@ static ASTNode *parse_module(Parser *p, int line, int col) {
 }
 
 static ASTNode *parse_export(Parser *p, int line, int col) {
-  if (parser_match(p, TOKEN_FUNCTION)) {
+  if (parser_match(p, TOKEN_FUNCTION))
     return parse_function_common(p, line, col, false, true);
-  }
 
   if (parser_match(p, TOKEN_LOCAL)) {
     if (parser_check(p, TOKEN_FUNCTION)) {
@@ -237,7 +235,6 @@ static ASTNode *parse_import(Parser *p, int line, int col) {
   }
 
   mark_import(n->import.module_path);
-
   return n;
 }
 
@@ -307,7 +304,7 @@ static ASTNode *parse_struct(Parser *p, int line, int col) {
 
   int cap = 8, cnt = 0;
   ASTNode **fields = malloc(sizeof(ASTNode *) * cap);
-  char **names = malloc(sizeof(char *) * cap);
+  const char **names = malloc(sizeof(const char *) * cap);
   ASTNode **values = calloc(cap, sizeof(ASTNode *));
 
   while (!parser_check(p, TOKEN_END) && !parser_check(p, TOKEN_EOF)) {
@@ -317,7 +314,7 @@ static ASTNode *parse_struct(Parser *p, int line, int col) {
     if (cnt >= cap) {
       cap *= 2;
       fields = realloc(fields, sizeof(ASTNode *) * cap);
-      names = realloc(names, sizeof(char *) * cap);
+      names = realloc(names, sizeof(const char *) * cap);
       values = realloc(values, sizeof(ASTNode *) * cap);
     }
 
@@ -346,13 +343,13 @@ static ASTNode *parse_enum(Parser *p, int line, int col) {
   parser_expect(p, TOKEN_IDENT, "enum name");
 
   int cap = 8, cnt = 0;
-  char **values = malloc(sizeof(char *) * cap);
+  const char **values = malloc(sizeof(const char *) * cap);
   ASTNode **exprs = calloc(cap, sizeof(ASTNode *));
 
   while (!parser_check(p, TOKEN_END) && !parser_check(p, TOKEN_EOF)) {
     if (cnt >= cap) {
       cap *= 2;
-      values = realloc(values, sizeof(char *) * cap);
+      values = realloc(values, sizeof(const char *) * cap);
       exprs = realloc(exprs, sizeof(ASTNode *) * cap);
     }
 
@@ -382,7 +379,8 @@ ASTNode *parse_statement(Parser *p) {
   if (parser_match(p, TOKEN_EXPORT))
     return parse_export(p, line, col);
 
-  if (parser_check(p, TOKEN_IDENT) && strcmp(p->current.text, "import") == 0 &&
+  if (parser_check(p, TOKEN_IDENT) && p->current.text &&
+      strcmp(p->current.text, "import") == 0 &&
       (!peek(p) || peek(p)->type != TOKEN_LPAREN)) {
     parser_advance(p);
     return parse_import(p, line, col);
@@ -431,6 +429,7 @@ ASTNode *parse_statement(Parser *p) {
     return ast_create_node(NODE_BREAK, line, col);
   if (parser_match(p, TOKEN_CONTINUE))
     return ast_create_node(NODE_CONTINUE, line, col);
+
   if (parser_match(p, TOKEN_DEFER)) {
     ASTNode *n = ast_create_node(NODE_DEFER, line, col);
     n->defer_stmt.expr = parse_expression(p);

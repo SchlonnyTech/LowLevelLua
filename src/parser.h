@@ -2,13 +2,16 @@
 #define PARSER_H
 
 #include "ast.h"
+#include "intern.h"
 #include "lexer.h"
+#include <stddef.h>
 
 typedef struct Parser {
   Token *tokens;
   int token_count;
   int pos;
   Token current;
+  InternPool *intern;
 } Parser;
 
 Parser *parser_create(Token *tokens, int count);
@@ -29,7 +32,11 @@ ASTNode *parser_parse_program(Parser *p);
 void parser_set_source(const char *source);
 
 Token *peek(Parser *p);
-char *toktext(Parser *p);
+const char *toktext(Parser *p);
 bool is_import_call(Parser *p);
 ASTNode *parse_keyword_statement(Parser *p);
+
+const char *parser_intern(Parser *p, const char *s);
+const char *parser_intern_n(Parser *p, const char *s, size_t n);
+
 #endif

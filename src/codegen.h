@@ -9,6 +9,7 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <pthread.h>
+#include <stdint.h>
 
 typedef enum {
   BUILTIN_PRINT,
@@ -37,16 +38,68 @@ typedef enum {
 typedef enum { BUILD_DEBUG, BUILD_RELEASE } BuildType;
 
 typedef struct TypeCacheEntry {
-  char *key;
+  const char *key;
   LLVMTypeRef type;
   struct TypeCacheEntry *next;
 } TypeCacheEntry;
 
 typedef struct StringPoolEntry {
-  char *key;
+  const char *key;
   LLVMValueRef value;
   struct StringPoolEntry *next;
 } StringPoolEntry;
+
+typedef struct {
+  LLVMValueRef value;
+  LLVMTypeRef type;
+} FuncEntry;
+
+typedef struct {
+  uint32_t *buckets;
+  uint32_t *next;
+  FuncEntry *entries;
+  const char **names;
+  int count, capacity;
+  int bucket_count;
+} FuncMap;
+
+typedef struct {
+  uint32_t *buckets;
+  uint32_t *next;
+  LLVMValueRef *vals;
+  const char **keys;
+  int count, capacity;
+  int bucket_count;
+} StrCache;
+
+typedef struct {
+  LLVMValueRef value;
+  LLVMTypeRef type;
+} ScopeEntry;
+
+typedef struct ScopeVar {
+  const char *name;
+  LLVMValueRef value;
+  LLVMTypeRef type;
+  uint64_t hash;
+  struct ScopeVar *next;
+} ScopeVar;
+
+typedef struct Scope {
+  ScopeVar **buckets;
+  int bucket_count;
+  int count;
+  struct Scope *parent;
+} Scope;
+
+typedef struct FieldLookup {
+  LLVMTypeRef type;
+  const char **names;
+  int count;
+  uint32_t *buckets;
+  uint32_t *next;
+  int bucket_count;
+} FieldLookup;
 
 typedef struct CodeGenContext {
   LLVMContextRef llvm_ctx;
@@ -61,6 +114,7 @@ typedef struct CodeGenContext {
     LLVMValueRef return_value;
     LLVMTypeRef return_type;
     bool has_return;
+    Scope *scope;
   } current_func;
 
   struct LoopContext {
@@ -69,36 +123,38 @@ typedef struct CodeGenContext {
     struct LoopContext *parent;
   } *loop_stack;
 
-  struct Scope {
-    char **names;
-    LLVMValueRef *values;
-    LLVMTypeRef *types;
-    int count;
-    int capacity;
-    struct Scope *parent;
-  } *current_scope;
+  Scope *current_scope;
+  Scope *global_scope;
 
-  struct Scope *global_scope;
+  FuncMap func_map;
+  StrCache str_cache;
 
-  struct {
-    char **names;
-    LLVMValueRef *functions;
-    LLVMTypeRef *types;
-    int *builtin_types;
-    int *arg_counts;
-    int count;
-    int capacity;
-  } functions;
+  LLVMValueRef printf_fn;
+  LLVMValueRef puts_fn;
+  LLVMValueRef strlen_fn;
+  LLVMValueRef strcmp_fn;
+  LLVMValueRef strcat_fn;
+  LLVMValueRef malloc_fn;
+  LLVMValueRef fmt_int;
+  LLVMValueRef fmt_flt;
+  LLVMTypeRef printf_type;
+  LLVMTypeRef puts_type;
 
   struct {
-    char **names;
+    const char **names;
     LLVMTypeRef *types;
     int *field_counts;
-    char ***field_names;
-
+    const char ***field_names;
+    FieldLookup **lookups;
     int count;
     int capacity;
   } struct_types;
+
+  struct {
+    const char **names;
+    int *types;
+    int count, capacity;
+  } builtins;
 
   LLVMTargetMachineRef target_machine;
   LLVMTargetDataRef target_data;
@@ -119,12 +175,6 @@ typedef struct CodeGenContext {
   int temp_counter;
   int block_counter;
   int string_counter;
-
-  struct {
-    char **strings;
-    LLVMValueRef *values;
-    int count;
-  } string_pool;
 
   char error_msg[1024];
   bool has_error;
@@ -182,6 +232,9 @@ void codegen_scope_pop(CodeGenContext *ctx);
 void codegen_scope_add(CodeGenContext *ctx, const char *name,
                        LLVMValueRef value, LLVMTypeRef type);
 LLVMValueRef codegen_scope_get(CodeGenContext *ctx, const char *name);
+LLVMTypeRef codegen_scope_get_type(CodeGenContext *ctx, const char *name);
+bool codegen_scope_lookup(CodeGenContext *ctx, const char *name,
+                          ScopeEntry *out);
 
 void codegen_loop_push(CodeGenContext *ctx, LLVMBasicBlockRef cont,
                        LLVMBasicBlockRef brk);
@@ -197,8 +250,27 @@ int llvm_get_builtin_type(CodeGenContext *ctx, const char *name);
 void llvm_register_builtins(CodeGenContext *ctx);
 LLVMValueRef codegen_syscall(CodeGenContext *ctx, int syscall_num,
                              LLVMValueRef *args, int arg_count);
-LLVMTypeRef codegen_scope_get_type(CodeGenContext *ctx, const char *name);
 
 int codegen_struct_field_index(CodeGenContext *ctx, LLVMTypeRef struct_type,
                                const char *field_name);
+void codegen_func_map_add(CodeGenContext *ctx, const char *name,
+                          LLVMValueRef fn, LLVMTypeRef ft);
+FuncEntry *codegen_func_map_find(CodeGenContext *ctx, const char *name);
+
+int codegen_op_from_string(const char *s);
+int codegen_is_float_ty(LLVMTypeRef t);
+int codegen_is_str_ty(LLVMTypeRef t);
+int llvm_get_builtin_type(CodeGenContext *ctx, const char *name);
+LLVMValueRef codegen_arith_binop(CodeGenContext *ctx, OpKind op, LLVMValueRef l,
+                                 LLVMValueRef r);
+LLVMValueRef codegen_arith_strconcat(CodeGenContext *ctx, LLVMValueRef l,
+                                     LLVMValueRef r);
+LLVMValueRef codegen_arith_strcmp(CodeGenContext *ctx, OpKind op,
+                                  LLVMValueRef l, LLVMValueRef r);
+LLVMValueRef codegen_arith_unary(CodeGenContext *ctx, const char *op,
+                                 LLVMValueRef v);
+void codegen_run_opt_passes(CodeGenContext *ctx);
+LLVMValueRef codegen_table_index(CodeGenContext *ctx, ASTNode *expr,
+                                 LLVMValueRef arr, LLVMValueRef idx,
+                                 int is_typed, LLVMTypeRef elem_type);
 #endif

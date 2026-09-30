@@ -1,9 +1,29 @@
 #ifndef LLL_AST_H
 #define LLL_AST_H
 
+#include <llvm-c/Types.h>
 #include <stdbool.h>
 #include <stdint.h>
-
+typedef struct LLVMOpaqueType *LLVMTypeRef;
+typedef enum {
+  OP_NONE,
+  OP_ADD,
+  OP_SUB,
+  OP_MUL,
+  OP_DIV,
+  OP_MOD,
+  OP_EQ,
+  OP_NE,
+  OP_LT,
+  OP_LE,
+  OP_GT,
+  OP_GE,
+  OP_AND,
+  OP_OR,
+  OP_INDEX,
+  OP_RANGE
+} OpKind;
+typedef enum { TABLE_DYN, TABLE_INT, TABLE_STR, TABLE_FLOAT } TableKind;
 typedef enum {
   NODE_PROGRAM,
   NODE_BLOCK,
@@ -47,6 +67,7 @@ typedef enum {
 } NodeType;
 
 typedef struct ASTNode ASTNode;
+typedef struct AstArena AstArena;
 
 typedef struct {
   ASTNode **statements;
@@ -54,7 +75,7 @@ typedef struct {
 } BlockNode;
 
 typedef struct {
-  char *name;
+  const char *name;
   ASTNode **params;
   ASTNode **param_types;
   int param_count;
@@ -65,58 +86,55 @@ typedef struct {
 } FunctionNode;
 
 typedef struct {
-  char *path;
-  char *alias;
+  const char *path;
+  const char *alias;
 } ExternLibrary;
 
 typedef struct {
-  char *library;
-  char *name;
-  char *symbol;
+  const char *library;
+  const char *name;
+  const char *symbol;
   ASTNode **param_types;
   int param_count;
   ASTNode *return_type;
 } ExternFunction;
 
 typedef struct {
-  char *name;
+  const char *name;
   ASTNode **args;
   int arg_count;
 } CallNode;
 
 typedef struct {
-  char *name;
+  const char *name;
 } VariableNode;
-
 typedef struct {
   int64_t value;
 } IntLiteralNode;
-
 typedef struct {
   double value;
 } FloatLiteralNode;
-
 typedef struct {
-  char *value;
+  const char *value;
 } StringLiteralNode;
-
 typedef struct {
   bool value;
 } BoolLiteralNode;
 
 typedef struct {
-  char *op;
+  const char *op;
+  OpKind op_kind;
   ASTNode *left;
   ASTNode *right;
 } BinaryOpNode;
 
 typedef struct {
-  char *op;
+  const char *op;
   ASTNode *operand;
 } UnaryOpNode;
 
 typedef struct {
-  char *op;
+  const char *op;
   ASTNode *target;
   ASTNode *value;
 } AssignNode;
@@ -135,14 +153,13 @@ typedef struct {
   ASTNode *condition;
   ASTNode *body;
 } WhileNode;
-
 typedef struct {
   ASTNode *body;
   ASTNode *condition;
 } RepeatNode;
 
 typedef struct {
-  char *var;
+  const char *var;
   ASTNode *start;
   ASTNode *end;
   ASTNode *step;
@@ -150,16 +167,16 @@ typedef struct {
 } ForNode;
 
 typedef struct {
-  char *name;
+  const char *name;
   ASTNode *type;
   ASTNode *init;
   bool is_exported;
 } LocalVarNode;
 
 typedef struct {
-  char *name;
+  const char *name;
   ASTNode **fields;
-  char **field_names;
+  const char **field_names;
   ASTNode **field_values;
   int field_count;
   bool has_methods;
@@ -167,17 +184,16 @@ typedef struct {
 } StructNode;
 
 typedef struct {
-  char *name;
-  char **values;
+  const char *name;
+  const char **values;
   ASTNode **value_exprs;
   int value_count;
 } EnumNode;
 
 typedef struct {
   ASTNode *object;
-  char *field;
+  const char *field;
 } FieldAccessNode;
-
 typedef struct {
   ASTNode *condition;
   ASTNode *then_expr;
@@ -185,52 +201,46 @@ typedef struct {
 } TernaryNode;
 
 typedef struct {
-  char *type_name;
+  const char *type_name;
   ASTNode *expr;
 } TypeCastNode;
 
 typedef struct {
   ASTNode **fields;
-  char **field_names;
+  const char **field_names;
   int field_count;
+  TableKind kind;
+  LLVMTypeRef elem_type;
 } TableNode;
 
 typedef struct {
-  char *code;
+  const char *code;
 } AsmBlockNode;
-
 typedef struct {
-  char *code;
+  const char *code;
 } CBlockNode;
-
 typedef struct {
   ASTNode *expr;
 } DeferNode;
-
 typedef struct {
-  char *module_path;
+  const char *module_path;
 } ImportNode;
-
 typedef struct {
-  char *name;
+  const char *name;
   ASTNode *body;
 } ModuleNode;
-
 typedef struct {
   ASTNode *operand;
 } PointerDerefNode;
-
 typedef struct {
   ASTNode *operand;
 } AddressOfNode;
-
 typedef struct {
-  char *type_name;
+  const char *type_name;
   int pointer_depth;
 } TypeAnnotationNode;
-
 typedef struct {
-  char *name;
+  const char *name;
   ASTNode **args;
   int arg_count;
 } KeywordNode;
@@ -240,8 +250,7 @@ struct ASTNode {
   int line;
   int column;
   bool is_module;
-  char *module_name;
-
+  const char *module_name;
   union {
     BlockNode block;
     FunctionNode func;
@@ -279,6 +288,9 @@ struct ASTNode {
     KeywordNode keyword;
   };
 };
+
 void ast_destroy_pools(void);
 ASTNode *ast_create_node(NodeType type, int line, int column);
+AstArena *ast_arena_current(void);
+
 #endif

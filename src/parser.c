@@ -1,4 +1,5 @@
 #include "parser.h"
+#include "intern.h"
 #include "keywords/keywords.h"
 #include "utils.h"
 #include <setjmp.h>
@@ -8,7 +9,7 @@
 #include <string.h>
 
 #define NODE_POOL_SIZE 4096
-#define DEBUG_PARSER 0 // put me to da 1 to unleash my power!
+#define DEBUG_PARSER 0
 #define DPRINTF_PARSER(fmt, ...)                                               \
   if (DEBUG_PARSER)                                                            \
   fprintf(stderr, "[PARSER] " fmt, ##__VA_ARGS__)
@@ -57,16 +58,10 @@ void ast_destroy_pools(void) {
     for (int i = 0; i < current_pool->next; i++) {
       ASTNode *n = &current_pool->nodes[i];
       switch (n->type) {
-      case NODE_KEYWORD:
-        free(n->keyword.name);
-        free(n->keyword.args);
-        break;
       case NODE_CALL:
-        free(n->call.name);
         free(n->call.args);
         break;
       case NODE_FUNCTION:
-        free(n->func.name);
         free(n->func.params);
         free(n->func.param_types);
         break;
@@ -74,20 +69,7 @@ void ast_destroy_pools(void) {
       case NODE_PROGRAM:
         free(n->block.statements);
         break;
-      case NODE_STRING_LITERAL:
-        free(n->string_lit.value);
-        break;
-      case NODE_VARIABLE:
-        free(n->variable.name);
-        break;
-      case NODE_BINARY_OP:
-        free(n->binary.op);
-        break;
-      case NODE_UNARY_OP:
-        free(n->unary.op);
-        break;
       case NODE_STRUCT:
-        free(n->struct_def.name);
         free(n->struct_def.fields);
         free(n->struct_def.field_names);
         free(n->struct_def.field_values);
@@ -95,34 +77,12 @@ void ast_destroy_pools(void) {
           free(n->struct_def.methods);
         break;
       case NODE_ENUM:
-        free(n->enum_def.name);
         free(n->enum_def.values);
         free(n->enum_def.value_exprs);
-        break;
-      case NODE_FIELD_ACCESS:
-        free(n->field_access.field);
-        break;
-      case NODE_ASM_BLOCK:
-        free(n->asm_block.code);
-        break;
-      case NODE_IMPORT:
-        free(n->import.module_path);
         break;
       case NODE_TABLE:
         free(n->table.fields);
         free(n->table.field_names);
-        break;
-      case NODE_FOR:
-        free(n->for_stmt.var);
-        break;
-      case NODE_LOCAL_VAR:
-        free(n->local_var.name);
-        break;
-      case NODE_TYPE_CAST:
-        free(n->cast.type_name);
-        break;
-      case NODE_ASSIGN:
-        free(n->assign.op);
         break;
       default:
         break;
@@ -152,9 +112,9 @@ void parser_set_source(const char *source) {
         cap *= 2;
         g_lines = realloc(g_lines, sizeof(char *) * cap);
       }
-      int len = end - start;
+      int len = (int)(end - start);
       g_lines[g_line_count] = malloc(len + 1);
-      strncpy(g_lines[g_line_count], start, len);
+      memcpy(g_lines[g_line_count], start, len);
       g_lines[g_line_count][len] = '\0';
       g_line_count++;
       start = end + 1;
@@ -176,9 +136,8 @@ void parser_error(int line, int column, const char *fmt, ...) {
   va_start(args, fmt);
 
   fprintf(stderr, "\033[1;31mError\033[0m");
-  if (line > 0) {
+  if (line > 0)
     fprintf(stderr, " at line %d, column %d", line, column);
-  }
   fprintf(stderr, ": ");
   vfprintf(stderr, fmt, args);
   fprintf(stderr, "\n");
@@ -188,13 +147,11 @@ void parser_error(int line, int column, const char *fmt, ...) {
     const char *src = g_lines[line - 1];
     fprintf(stderr, "\n  %4d | %s\n", line, src);
     fprintf(stderr, "       | ");
-    for (int i = 0; i < column - 1 && i < (int)strlen(src); i++) {
+    for (int i = 0; i < column - 1 && i < (int)strlen(src); i++)
       fprintf(stderr, src[i] == '\t' ? "\t" : " ");
-    }
     fprintf(stderr, "\033[31m");
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 10; i++)
       fprintf(stderr, i % 2 ? "^" : "~");
-    }
     fprintf(stderr, "\033[0m\n");
   }
 }
@@ -204,9 +161,8 @@ void parser_warning(int line, int column, const char *fmt, ...) {
   va_start(args, fmt);
 
   fprintf(stderr, "\033[1;33mWarning\033[0m");
-  if (line > 0) {
+  if (line > 0)
     fprintf(stderr, " at line %d, column %d", line, column);
-  }
   fprintf(stderr, ": ");
   vfprintf(stderr, fmt, args);
   fprintf(stderr, "\n");
@@ -216,13 +172,11 @@ void parser_warning(int line, int column, const char *fmt, ...) {
     const char *src = g_lines[line - 1];
     fprintf(stderr, "\n  %4d | %s\n", line, src);
     fprintf(stderr, "       | ");
-    for (int i = 0; i < column - 1 && i < (int)strlen(src); i++) {
+    for (int i = 0; i < column - 1 && i < (int)strlen(src); i++)
       fprintf(stderr, src[i] == '\t' ? "\t" : " ");
-    }
     fprintf(stderr, "\033[33m");
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 10; i++)
       fprintf(stderr, i % 2 ? "^" : "~");
-    }
     fprintf(stderr, "\033[0m\n");
   }
 }
@@ -263,30 +217,48 @@ Parser *parser_create(Token *tokens, int count) {
   p->tokens = tokens;
   p->token_count = count;
   p->pos = 0;
+  p->intern = intern_pool_create();
   parser_advance(p);
   return p;
 }
 
 void parser_destroy(Parser *p) {
   DPRINTF_PARSER("parser_destroy\n");
+  if (!p)
+    return;
+  if (p->intern)
+    intern_pool_destroy(p->intern);
   free(p);
+}
+
+const char *parser_intern(Parser *p, const char *s) {
+  if (!p->intern || !s)
+    return s;
+  return intern(p->intern, s);
+}
+
+const char *parser_intern_n(Parser *p, const char *s, size_t n) {
+  if (!p->intern || !s)
+    return s;
+  return intern_n(p->intern, s, n);
 }
 
 Token *peek(Parser *p) {
   return p->pos < p->token_count ? &p->tokens[p->pos] : NULL;
 }
 
-char *toktext(Parser *p) { return strdup(p->current.text); }
+const char *toktext(Parser *p) { return parser_intern(p, p->current.text); }
 
 bool is_import_call(Parser *p) {
-  return parser_check(p, TOKEN_IDENT) &&
+  return parser_check(p, TOKEN_IDENT) && p->current.text &&
          strcmp(p->current.text, "import") == 0 && peek(p) &&
          peek(p)->type == TOKEN_LPAREN;
 }
 
 static bool is_keyword_import(const char *name) {
   for (int i = 0; keyword_handlers[i].name; i++) {
-    if (strcmp(keyword_handlers[i].name, name) == 0)
+    if (keyword_handlers[i].name == name ||
+        strcmp(keyword_handlers[i].name, name) == 0)
       return true;
   }
   return false;
@@ -297,8 +269,7 @@ ASTNode *parse_keyword_statement(Parser *p) {
     return NULL;
 
   const char *name = p->current.text;
-
-  if (strchr(name, '.') == NULL)
+  if (!name || strchr(name, '.') == NULL)
     return NULL;
 
   KeywordHandler *kh = find_keyword(name);
@@ -313,12 +284,10 @@ ASTNode *parse_keyword_statement(Parser *p) {
 static void check_import_exists(ASTNode *node) {
   if (node->type == NODE_IMPORT && node->import.module_path) {
     const char *path = node->import.module_path;
-
     if (is_keyword_import(path)) {
       mark_import(path);
       return;
     }
-
     if (file_exists(path))
       return;
 
@@ -366,9 +335,8 @@ void validate_ast(ASTNode *node) {
   switch (node->type) {
   case NODE_PROGRAM:
   case NODE_BLOCK:
-    for (int i = 0; i < node->block.statement_count; i++) {
+    for (int i = 0; i < node->block.statement_count; i++)
       validate_ast(node->block.statements[i]);
-    }
     break;
   case NODE_FUNCTION:
     validate_ast(node->func.body);
@@ -412,15 +380,12 @@ ASTNode *parser_parse_program(Parser *p) {
 
   while (!parser_check(p, TOKEN_EOF) && iterations < max_iterations) {
     iterations++;
-
     if (cnt >= cap) {
       cap *= 2;
       nodes = realloc(nodes, sizeof(ASTNode *) * cap);
     }
 
     int prev_pos = p->pos;
-    int prev_token_type = p->current.type;
-
     ASTNode *stmt = parse_statement(p);
 
     if (stmt) {
@@ -430,15 +395,12 @@ ASTNode *parser_parse_program(Parser *p) {
     } else {
       DPRINTF_PARSER("parse_statement returned NULL\n");
       if (p->pos <= prev_pos) {
-        DPRINTF_PARSER(
-            "PARSER STUCK! Position went backwards or stayed same: %d -> %d\n",
-            prev_pos, p->pos);
+        DPRINTF_PARSER("PARSER STUCK: %d -> %d\n", prev_pos, p->pos);
         parser_error(p->current.line, p->current.column,
                      "Parser stuck - unable to parse statement at position %d",
                      p->pos);
-        if (error_jmp_set) {
+        if (error_jmp_set)
           longjmp(error_jmp, 1);
-        }
         break;
       }
     }
