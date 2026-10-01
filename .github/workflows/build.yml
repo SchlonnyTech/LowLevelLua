@@ -34,19 +34,30 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Verify binary
-        run: ./build/lllc --version
+      - name: Smoke test
+        run: |
+          ./build/lllc --version
+          ./build/lllc --version | grep -q "LLL Compiler version"
 
       - name: Stage
         run: |
           mkdir -p dist
           cp build/lllc dist/lllc-linux-x86_64
           strip dist/lllc-linux-x86_64 || true
+          ls -la dist/
+
+      - name: Zip
+        run: |
+          cd dist
+          zip -r ../lllc-linux-x86_64.zip .
+          cd ..
+          ls -la lllc-linux-x86_64.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: lllc-linux-x86_64
-          path: dist/lllc-linux-x86_64
+          path: lllc-linux-x86_64.zip
+          if-no-files-found: error
 
   windows:
     name: Windows x86_64
@@ -66,6 +77,10 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-libffi
+            mingw-w64-ucrt-x86_64-libxml2
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-zstd
             zip
 
       - name: Configure
@@ -74,83 +89,103 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Verify binary
-        run: ./build/lllc.exe --version
+      - name: Smoke test
+        run: |
+          ./build/lllc.exe --version
+          ./build/lllc.exe --version | grep -q "LLL Compiler version"
 
       - name: Collect dependencies
         run: |
           mkdir -p dist
           cp build/lllc.exe dist/lllc-windows-x86_64.exe
 
-          collect() {
-            local name="$1"
-            local path
-            path=$(find /ucrt64/bin -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
-            if [ -z "$path" ]; then
-              path=$(find /mingw64/bin -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
-            fi
+          REQUIRED="
+            libLLVM-22.dll
+            libffi-8.dll
+            libxml2-16.dll
+            zlib1.dll
+            libzstd.dll
+            libstdc++-6.dll
+            libgcc_s_seh-1.dll
+            libwinpthread-1.dll
+          "
+
+          missing=0
+          for name in $REQUIRED; do
+            path=$(find /ucrt64/bin -maxdepth 1 -iname "$name" | head -1)
             if [ -n "$path" ]; then
               cp "$path" dist/
-              echo "  copied $name"
+              echo "ok      $name"
             else
-              echo "  MISSING $name"
+              echo "MISSING $name"
+              missing=1
             fi
-          }
+          done
 
-          echo "Collecting runtime dependencies..."
-
-          collect 'libLLVM*.dll'
-          collect 'libstdc++-6.dll'
-          collect 'libgcc_s_seh-1.dll'
-          collect 'libwinpthread-1.dll'
-          collect 'libzstd.dll'
-          collect 'libz.dll'
-          collect 'zlib1.dll'
-          collect 'libxml2-2.dll'
-          collect 'libffi-8.dll'
-          collect 'libedit-0.dll'
-          collect 'libssp-0.dll'
-          collect 'libssp-0.dll'
-          collect 'libatomic-1.dll'
-          collect 'libiconv-2.dll'
-          collect 'libcharset-1.dll'
-          collect 'libintl-8.dll'
-          collect 'liblzma-5.dll'
-          collect 'libbz2-1.dll'
-          collect 'libcurl-4.dll'
-          collect 'libcrypto-3-x64.dll'
-          collect 'libssl-3-x64.dll'
-          collect 'libpsl-5.dll'
-          collect 'libidn2-0.dll'
-          collect 'libunistring-5.dll'
-          collect 'libbrotlidec.dll'
-          collect 'libbrotlicommon.dll'
+          if [ $missing -ne 0 ]; then
+            echo
+            echo "Available DLLs matching patterns:"
+            ls /ucrt64/bin | grep -iE 'llvm|ffi|xml|zlib|zstd|stdc|gcc|pthread' | sort
+            exit 1
+          fi
 
           echo
           echo "--- dist ---"
           ls -la dist/
 
-      - name: Smoke test on Windows
-        shell: pwsh
+      - name: Verify all DLLs are present
         run: |
-          $env:PATH = "$pwd\dist;$env:PATH"
-          .\dist\lllc-windows-x86_64.exe --version
+          for name in libLLVM-22.dll libffi-8.dll libxml2-16.dll zlib1.dll libzstd.dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll lllc-windows-x86_64.exe; do
+            if [ ! -f "dist/$name" ]; then
+              echo "FAIL: dist/$name missing"
+              exit 1
+            fi
+          done
+          echo "All required files present."
 
       - name: Zip
         run: |
           cd dist
           zip -r ../lllc-windows-x86_64.zip .
           cd ..
+          ls -la lllc-windows-x86_64.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: lllc-windows-x86_64
           path: lllc-windows-x86_64.zip
+          if-no-files-found: error
+
+  verify-windows-artifact:
+    name: Verify Windows artifact
+    needs: [windows]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lllc-windows-x86_64
+          path: artifact
+
+      - name: Extract
+        shell: pwsh
+        run: |
+          Expand-Archive -Path artifact\lllc-windows-x86_64.zip -DestinationPath extracted
+          Get-ChildItem extracted | Format-Table Name, Length
+
+      - name: Run on Windows
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd\extracted;$env:PATH"
+          $out = & .\extracted\lllc-windows-x86_64.exe --version 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "Exit code $LASTEXITCODE" }
+          if ($out -notmatch "LLL Compiler version") { throw "Unexpected output" }
+          Write-Host "Windows artifact verified."
 
   bump:
     name: Auto-tag
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [linux, windows]
+    needs: [linux, windows, verify-windows-artifact]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -158,7 +193,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Read version from lll.h
+      - name: Read version
         id: ver
         run: |
           MAJOR=$(grep -E '^#define LLL_VERSION_MAJOR' include/lll.h | awk '{print $3}')
@@ -205,16 +240,13 @@ jobs:
         with:
           path: artifacts
 
-      - name: Zip Linux
-        run: |
-          cd artifacts/lllc-linux-x86_64
-          zip -r ../../lllc-linux-x86_64.zip .
-          cd ../..
+      - name: List artifacts
+        run: find artifacts -type f
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            lllc-linux-x86_64.zip
+            artifacts/lllc-linux-x86_64/lllc-linux-x86_64.zip
             artifacts/lllc-windows-x86_64/lllc-windows-x86_64.zip
           generate_release_notes: true
         env:
