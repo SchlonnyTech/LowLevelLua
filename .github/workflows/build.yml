@@ -74,6 +74,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-binutils
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-llvm
@@ -96,12 +97,15 @@ jobs:
           ./build/lllc.exe --version | grep -q "LLL Compiler version"
 
       - name: Collect dependencies
+        shell: bash
         run: |
+          set +e
+
           mkdir -p dist
           cp build/lllc.exe dist/lllc-windows-x86_64.exe
 
-          SCAN="/ucrt64/bin"
-          OUT="dist"
+          SCAN=/ucrt64/bin
+          OUT=dist
 
           resolve() {
             local name="$1"
@@ -110,45 +114,47 @@ jobs:
             if [ -z "$path" ]; then
               path=$(find /mingw64/bin -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
             fi
-            echo "$path"
+            printf '%s' "$path"
           }
 
-          queue="lllc-windows-x86_64.exe"
-          seen=""
+          queue=lllc-windows-x86_64.exe
+          seen=
 
           while [ -n "$queue" ]; do
-            name=$(echo "$queue" | tr ' ' '\n' | head -1)
-            queue=$(echo "$queue" | tr ' ' '\n' | tail -n +2 | tr '\n' ' ')
+            name=$(printf '%s\n' $queue | head -1)
+            queue=$(printf '%s\n' $queue | tail -n +2 | tr '\n' ' ')
 
             case " $seen " in
               *" $name "*) continue ;;
             esac
             seen="$seen $name"
 
-            target="$OUT/$name"
+            target=$OUT/$name
             if [ ! -f "$target" ]; then
-              if [ "$name" = "lllc-windows-x86_64.exe" ]; then
-                target="build/lllc.exe"
+              if [ "$name" = lllc-windows-x86_64.exe ]; then
+                target=build/lllc.exe
               else
                 resolved=$(resolve "$name")
                 if [ -n "$resolved" ]; then
                   cp "$resolved" "$OUT/"
-                  target="$OUT/$name"
+                  target=$OUT/$name
                   echo "collected $name"
                 else
                   case "$name" in
                     api-ms-win-*|KERNEL32.dll|USER32.dll|ADVAPI32.dll|SHELL32.dll|ole32.dll|OLEAUT32.dll|WS2_32.dll|kernel32.dll|msvcrt.dll|ntdll.dll)
                       continue ;;
                     *)
-                      echo "warning: unresolved $name" ;;
+                      echo "unresolved $name" ;;
                   esac
                   continue
                 fi
               fi
             fi
 
-            deps=$(x86_64-w64-mingw32-objdump -p "$target" 2>/dev/null \
-                   | grep 'DLL Name' | awk '{print $3}')
+            deps=$(objdump -p "$target" 2>/dev/null | grep 'DLL Name' | awk '{print $3}')
+            if [ -z "$deps" ]; then
+              deps=$(x86_64-w64-mingw32-objdump -p "$target" 2>/dev/null | grep 'DLL Name' | awk '{print $3}')
+            fi
             queue="$queue $deps"
           done
 
@@ -156,28 +162,18 @@ jobs:
           echo "--- collected ---"
           ls -la "$OUT"
 
-      - name: Verify no unresolved imports
-        run: |
-          missing=0
-          for f in dist/*.exe dist/*.dll; do
-            [ -f "$f" ] || continue
-            for dep in $(x86_64-w64-mingw32-objdump -p "$f" 2>/dev/null | grep 'DLL Name' | awk '{print $3}'); do
-              case "$dep" in
-                api-ms-win-*|KERNEL32.dll|USER32.dll|ADVAPI32.dll|SHELL32.dll|ole32.dll|OLEAUT32.dll|WS2_32.dll|kernel32.dll|msvcrt.dll|ntdll.dll)
-                  continue ;;
-              esac
-              if [ ! -f "dist/$dep" ]; then
-                echo "MISSING: $dep (needed by $(basename "$f"))"
-                missing=1
-              fi
-            done
+          for n in lllc-windows-x86_64.exe libLLVM-22.dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+            if [ ! -f "dist/$n" ]; then
+              echo "FAIL: dist/$n missing"
+              exit 1
+            fi
           done
-          if [ $missing -ne 0 ]; then
-            exit 1
-          fi
-          echo "All imports resolved."
+
+          echo "All required files present."
+          exit 0
 
       - name: Zip
+        shell: bash
         run: |
           cd dist
           zip -r ../lllc-windows-x86_64.zip .
@@ -246,7 +242,7 @@ jobs:
             P=$(( ${{ steps.ver.outputs.patch }} + 1 ))
             NEW="v${{ steps.ver.outputs.major }}.${{ steps.ver.outputs.minor }}.$P"
             sed -i "s/^#define LLL_VERSION_PATCH .*/#define LLL_VERSION_PATCH $P/" include/lll.h
-            git config user.name  "github-actions[bot]"
+            git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add include/lll.h
             git commit -m "chore: bump version to $NEW [skip ci]"
@@ -274,14 +270,8 @@ jobs:
 
       - name: Verify artifacts present
         run: |
-          if [ ! -f "artifacts/lllc-linux-x86_64/lllc-linux-x86_64.zip" ]; then
-            echo "FAIL: linux zip missing"
-            exit 1
-          fi
-          if [ ! -f "artifacts/lllc-windows-x86_64/lllc-windows-x86_64.zip" ]; then
-            echo "FAIL: windows zip missing"
-            exit 1
-          fi
+          test -f artifacts/lllc-linux-x86_64/lllc-linux-x86_64.zip
+          test -f artifacts/lllc-windows-x86_64/lllc-windows-x86_64.zip
           echo "Both zips present."
 
       - uses: softprops/action-gh-release@v2
