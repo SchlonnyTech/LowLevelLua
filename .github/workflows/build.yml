@@ -97,10 +97,7 @@ jobs:
           ./build/lllc.exe --version | grep -q "LLL Compiler version"
 
       - name: Collect dependencies
-        shell: bash
         run: |
-          set +e
-
           mkdir -p dist
           cp build/lllc.exe dist/lllc-windows-x86_64.exe
 
@@ -142,7 +139,7 @@ jobs:
                 if [ -n "$resolved" ]; then
                   cp "$resolved" "$OUT/$name"
                   target=$OUT/$name
-                  echo "collected $name (from $(basename "$resolved"))"
+                  echo "collected $name"
                 else
                   case "$name" in
                     api-ms-win-*|KERNEL32.dll|USER32.dll|ADVAPI32.dll|SHELL32.dll|ole32.dll|OLEAUT32.dll|WS2_32.dll|kernel32.dll|msvcrt.dll|ntdll.dll)
@@ -174,10 +171,8 @@ jobs:
           done
 
           echo "All required files present."
-          exit 0
 
       - name: Zip
-        shell: bash
         run: |
           cd dist
           zip -r ../lllc-windows-x86_64.zip .
@@ -218,9 +213,7 @@ jobs:
 
   publish:
     name: Publish release
-    if: |
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [linux, windows, verify-windows-artifact]
     runs-on: ubuntu-24.04
     steps:
