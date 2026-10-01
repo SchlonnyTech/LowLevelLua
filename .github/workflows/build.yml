@@ -108,11 +108,15 @@ jobs:
           OUT=dist
 
           resolve() {
-            local name="$1"
+            local want="$1"
+            local base="${want%.dll}"
             local path
-            path=$(find "$SCAN" -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
+            path=$(find "$SCAN" -maxdepth 1 -iname "$want" 2>/dev/null | head -1)
             if [ -z "$path" ]; then
-              path=$(find /mingw64/bin -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
+              path=$(find "$SCAN" -maxdepth 1 -iname "${base}.*.dll" 2>/dev/null | head -1)
+            fi
+            if [ -z "$path" ]; then
+              path=$(find "$SCAN" -maxdepth 1 -iname "${base}*.dll" 2>/dev/null | head -1)
             fi
             printf '%s' "$path"
           }
@@ -136,9 +140,9 @@ jobs:
               else
                 resolved=$(resolve "$name")
                 if [ -n "$resolved" ]; then
-                  cp "$resolved" "$OUT/"
+                  cp "$resolved" "$OUT/$name"
                   target=$OUT/$name
-                  echo "collected $name"
+                  echo "collected $name (from $(basename "$resolved"))"
                 else
                   case "$name" in
                     api-ms-win-*|KERNEL32.dll|USER32.dll|ADVAPI32.dll|SHELL32.dll|ole32.dll|OLEAUT32.dll|WS2_32.dll|kernel32.dll|msvcrt.dll|ntdll.dll)
@@ -212,9 +216,11 @@ jobs:
           if ($out -notmatch "LLL Compiler version") { throw "Unexpected output" }
           Write-Host "Windows artifact verified."
 
-  bump:
-    name: Auto-tag and release
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  publish:
+    name: Publish release
+    if: |
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push'
     needs: [linux, windows, verify-windows-artifact]
     runs-on: ubuntu-24.04
     steps:
