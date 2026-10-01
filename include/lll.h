@@ -8,7 +8,7 @@
 
 #define LLL_VERSION_MAJOR 1
 #define LLL_VERSION_MINOR 2
-#define LLL_VERSION_PATCH 3
+#define LLL_VERSION_PATCH 4
 
 typedef enum {
   PLATFORM_WINDOWS,
