@@ -183,7 +183,7 @@ jobs:
           Write-Host "Windows artifact verified."
 
   bump:
-    name: Auto-tag
+    name: Auto-tag and release
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [linux, windows, verify-windows-artifact]
     runs-on: ubuntu-24.04
@@ -229,13 +229,8 @@ jobs:
             git tag "$TAG"
             git push origin "$TAG"
           fi
+          echo "Created tag $TAG"
 
-  release:
-    name: Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows]
-    runs-on: ubuntu-24.04
-    steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -243,8 +238,21 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f
 
+      - name: Verify artifacts present
+        run: |
+          if [ ! -f "artifacts/lllc-linux-x86_64/lllc-linux-x86_64.zip" ]; then
+            echo "FAIL: linux zip missing"
+            exit 1
+          fi
+          if [ ! -f "artifacts/lllc-windows-x86_64/lllc-windows-x86_64.zip" ]; then
+            echo "FAIL: windows zip missing"
+            exit 1
+          fi
+          echo "Both zips present."
+
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
           files: |
             artifacts/lllc-linux-x86_64/lllc-linux-x86_64.zip
             artifacts/lllc-windows-x86_64/lllc-windows-x86_64.zip
