@@ -7,6 +7,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   linux:
     name: Linux x86_64
@@ -20,7 +23,7 @@ jobs:
           sudo apt-get install -y \
             llvm-18-dev libllvm18 llvm-18 \
             clang-18 cmake ninja-build build-essential \
-            libtcc-dev
+            libtcc-dev zip
 
       - name: Configure
         run: |
@@ -31,7 +34,10 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Rename artifact
+      - name: Verify binary
+        run: ./build/lllc --version
+
+      - name: Stage
         run: |
           mkdir -p dist
           cp build/lllc dist/lllc-linux-x86_64
@@ -60,6 +66,7 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-llvm
+            zip
 
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -67,43 +74,148 @@ jobs:
       - name: Build
         run: cmake --build build -j
 
-      - name: Bundle runtime DLLs
+      - name: Verify binary
+        run: ./build/lllc.exe --version
+
+      - name: Collect dependencies
         run: |
           mkdir -p dist
           cp build/lllc.exe dist/lllc-windows-x86_64.exe
-          for dll in libLLVM-*.dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
-            found=$(find /ucrt64/bin -maxdepth 1 -name "$dll" 2>/dev/null | head -1)
-            [ -n "$found" ] && cp "$found" dist/ || true
-          done
+
+          collect() {
+            local name="$1"
+            local path
+            path=$(find /ucrt64/bin -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
+            if [ -z "$path" ]; then
+              path=$(find /mingw64/bin -maxdepth 1 -iname "$name" 2>/dev/null | head -1)
+            fi
+            if [ -n "$path" ]; then
+              cp "$path" dist/
+              echo "  copied $name"
+            else
+              echo "  MISSING $name"
+            fi
+          }
+
+          echo "Collecting runtime dependencies..."
+
+          collect 'libLLVM*.dll'
+          collect 'libstdc++-6.dll'
+          collect 'libgcc_s_seh-1.dll'
+          collect 'libwinpthread-1.dll'
+          collect 'libzstd.dll'
+          collect 'libz.dll'
+          collect 'zlib1.dll'
+          collect 'libxml2-2.dll'
+          collect 'libffi-8.dll'
+          collect 'libedit-0.dll'
+          collect 'libssp-0.dll'
+          collect 'libssp-0.dll'
+          collect 'libatomic-1.dll'
+          collect 'libiconv-2.dll'
+          collect 'libcharset-1.dll'
+          collect 'libintl-8.dll'
+          collect 'liblzma-5.dll'
+          collect 'libbz2-1.dll'
+          collect 'libcurl-4.dll'
+          collect 'libcrypto-3-x64.dll'
+          collect 'libssl-3-x64.dll'
+          collect 'libpsl-5.dll'
+          collect 'libidn2-0.dll'
+          collect 'libunistring-5.dll'
+          collect 'libbrotlidec.dll'
+          collect 'libbrotlicommon.dll'
+
+          echo
+          echo "--- dist ---"
           ls -la dist/
+
+      - name: Smoke test on Windows
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd\dist;$env:PATH"
+          .\dist\lllc-windows-x86_64.exe --version
+
+      - name: Zip
+        run: |
+          cd dist
+          zip -r ../lllc-windows-x86_64.zip .
+          cd ..
 
       - uses: actions/upload-artifact@v4
         with:
           name: lllc-windows-x86_64
-          path: dist/
+          path: lllc-windows-x86_64.zip
+
+  bump:
+    name: Auto-tag
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read version from lll.h
+        id: ver
+        run: |
+          MAJOR=$(grep -E '^#define LLL_VERSION_MAJOR' include/lll.h | awk '{print $3}')
+          MINOR=$(grep -E '^#define LLL_VERSION_MINOR' include/lll.h | awk '{print $3}')
+          PATCH=$(grep -E '^#define LLL_VERSION_PATCH' include/lll.h | awk '{print $3}')
+          echo "major=$MAJOR" >> $GITHUB_OUTPUT
+          echo "minor=$MINOR" >> $GITHUB_OUTPUT
+          echo "patch=$PATCH" >> $GITHUB_OUTPUT
+          echo "current=v${MAJOR}.${MINOR}.${PATCH}" >> $GITHUB_OUTPUT
+
+      - name: Bump if needed
+        id: tag
+        run: |
+          TAG="${{ steps.ver.outputs.current }}"
+          if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            P=$(( ${{ steps.ver.outputs.patch }} + 1 ))
+            NEW="v${{ steps.ver.outputs.major }}.${{ steps.ver.outputs.minor }}.$P"
+            sed -i "s/^#define LLL_VERSION_PATCH .*/#define LLL_VERSION_PATCH $P/" include/lll.h
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add include/lll.h
+            git commit -m "chore: bump version to $NEW [skip ci]"
+            git push
+            echo "tag=$NEW" >> $GITHUB_OUTPUT
+          else
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if ! git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
 
   release:
-    name: Attach to release
+    name: Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [linux, windows]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Package
+      - name: Zip Linux
         run: |
-          cd artifacts
-          zip -r lllc-linux-x86_64.zip lllc-linux-x86_64/
-          zip -r lllc-windows-x86_64.zip lllc-windows-x86_64/
+          cd artifacts/lllc-linux-x86_64
+          zip -r ../../lllc-linux-x86_64.zip .
+          cd ../..
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/lllc-linux-x86_64.zip
-            artifacts/lllc-windows-x86_64.zip
+            lllc-linux-x86_64.zip
+            artifacts/lllc-windows-x86_64/lllc-windows-x86_64.zip
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
