@@ -1,9 +1,17 @@
 cmake_minimum_required(VERSION 3.10)
+# Cross-compile to Windows with MinGW
+option(LLL_CROSS_MINGW "Build a Windows .exe using MinGW" OFF)
+
 project(LLLCompiler VERSION 1.0.2 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(LLL_CROSS_MINGW AND NOT CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "${CMAKE_SOURCE_DIR}/cmake/mingw.cmake"
+      CACHE FILEPATH "MinGW toolchain" FORCE)
+endif()
 
 find_package(LLVM REQUIRED CONFIG)
 
@@ -53,7 +61,7 @@ target_link_libraries(lllc LLVM)
 
 if(WIN32)
   target_link_libraries(lllc ws2_32)
-else()
+elseif(NOT LLL_CROSS_MINGW)
   target_link_libraries(lllc dl m pthread)
 endif()
 

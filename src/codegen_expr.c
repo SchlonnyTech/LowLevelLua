@@ -1,3 +1,4 @@
+#include "asm.h"
 #include "codegen.h"
 #include "keywords.h"
 #include <stdlib.h>
@@ -492,16 +493,6 @@ static LLVMValueRef builtin_abs(CodeGenContext *ctx, ASTNode *c) {
   return LLVMBuildSelect(ctx->builder, cond, n, v, "abs");
 }
 
-LLVMValueRef codegen_asm(CodeGenContext *ctx, ASTNode *expr) {
-  if (!expr || !expr->asm_block.code)
-    return NULL;
-  LLVMTypeRef ft =
-      LLVMFunctionType(LLVMVoidTypeInContext(ctx->llvm_ctx), NULL, 0, 0);
-  LLVMValueRef ia =
-      LLVMConstInlineAsm(ft, expr->asm_block.code, "", true, false);
-  return LLVMBuildCall2(ctx->builder, ft, ia, NULL, 0, "asm");
-}
-
 static LLVMValueRef codegen_print(CodeGenContext *ctx, ASTNode *expr) {
   LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
   LLVMTypeRef i64t = LLVMInt64TypeInContext(ctx->llvm_ctx);
@@ -573,10 +564,45 @@ static LLVMValueRef codegen_print(CodeGenContext *ctx, ASTNode *expr) {
   return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
 }
 
+LLVMValueRef codegen_indirect_call(CodeGenContext *ctx, ASTNode *expr) {
+  LLVMValueRef fn_ptr = codegen_expr(ctx, expr->call.callee);
+  if (!fn_ptr) {
+    codegen_error(ctx, "indirect call: callee expression is null");
+    return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+  }
+
+  int ac = expr->call.arg_count;
+  LLVMValueRef *args = ac ? malloc(sizeof(LLVMValueRef) * ac) : NULL;
+  LLVMTypeRef *types = ac ? malloc(sizeof(LLVMTypeRef) * ac) : NULL;
+
+  LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+
+  for (int i = 0; i < ac; i++) {
+    LLVMValueRef a = codegen_expr(ctx, expr->call.args[i]);
+    LLVMTypeRef at = LLVMTypeOf(a);
+    if (LLVMGetTypeKind(at) == LLVMPointerTypeKind)
+      a = LLVMBuildPtrToInt(ctx->builder, a, i64, "p2i");
+    else if (at != i64)
+      a = LLVMBuildSExt(ctx->builder, a, i64, "ext");
+    args[i] = a;
+    types[i] = i64;
+  }
+
+  LLVMTypeRef fn_ty = LLVMFunctionType(i64, types, ac, 0);
+  LLVMValueRef casted = LLVMBuildIntToPtr(ctx->builder, fn_ptr,
+                                          LLVMPointerType(fn_ty, 0), "fnptr");
+  LLVMValueRef result =
+      LLVMBuildCall2(ctx->builder, fn_ty, casted, args, ac, "ffi");
+
+  free(args);
+  free(types);
+  return result;
+}
+
 LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   const char *name = expr->call.name;
-  int bt = llvm_get_builtin_type(ctx, name);
 
+  int bt = llvm_get_builtin_type(ctx, name);
   if (bt == BUILTIN_CUSTOM) {
     if (strcmp(name, "min") == 0)
       return builtin_min(ctx, expr);
@@ -597,17 +623,19 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
     return codegen_print(ctx, expr);
 
   FuncEntry *fe = codegen_func_map_find(ctx, name);
-  int ac = expr->call.arg_count;
-  LLVMValueRef stack_args[16];
-  LLVMValueRef *call_args =
-      ac <= 16 ? stack_args : malloc(sizeof(LLVMValueRef) * ac);
-
   if (fe) {
+    int ac = expr->call.arg_count;
+    LLVMValueRef stack_args[16];
+    LLVMValueRef *call_args =
+        ac <= 16 ? stack_args : malloc(sizeof(LLVMValueRef) * ac);
+
     LLVMTypeRef call_type = fe->type;
     if (LLVMGetTypeKind(call_type) == LLVMPointerTypeKind)
       call_type = LLVMGetElementType(call_type);
+
     for (int i = 0; i < ac; i++)
       call_args[i] = codegen_expr(ctx, expr->call.args[i]);
+
     LLVMValueRef result = LLVMBuildCall2(ctx->builder, call_type, fe->value,
                                          call_args, ac, "call");
     if (call_args != stack_args)
@@ -615,13 +643,52 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
     return result;
   }
 
+  ScopeEntry se;
+  if (codegen_scope_lookup(ctx, name, &se)) {
+    LLVMValueRef fn_ptr = codegen_variable(ctx, expr);
+
+    if (fn_ptr) {
+      int ac = expr->call.arg_count;
+      LLVMValueRef *args = ac ? malloc(sizeof(LLVMValueRef) * ac) : NULL;
+      LLVMTypeRef *types = ac ? malloc(sizeof(LLVMTypeRef) * ac) : NULL;
+      LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
+
+      for (int i = 0; i < ac; i++) {
+        LLVMValueRef a = codegen_expr(ctx, expr->call.args[i]);
+        LLVMTypeRef at = LLVMTypeOf(a);
+        if (LLVMGetTypeKind(at) == LLVMPointerTypeKind)
+          a = LLVMBuildPtrToInt(ctx->builder, a, i64, "p2i");
+        else if (at != i64)
+          a = LLVMBuildSExt(ctx->builder, a, i64, "ext");
+        args[i] = a;
+        types[i] = i64;
+      }
+
+      LLVMTypeRef fn_ty = LLVMFunctionType(i64, types, ac, 0);
+      LLVMValueRef casted = LLVMBuildIntToPtr(
+          ctx->builder, fn_ptr, LLVMPointerType(fn_ty, 0), "fnptr");
+      LLVMValueRef result =
+          LLVMBuildCall2(ctx->builder, fn_ty, casted, args, ac, "ffi");
+
+      free(args);
+      free(types);
+      return result;
+    }
+  }
+
+  int ac = expr->call.arg_count;
+  LLVMValueRef stack_args[16];
+  LLVMValueRef *call_args =
+      ac <= 16 ? stack_args : malloc(sizeof(LLVMValueRef) * ac);
   LLVMTypeRef stack_ptypes[16];
   LLVMTypeRef *ptypes =
       ac <= 16 ? stack_ptypes : malloc(sizeof(LLVMTypeRef) * ac);
+
   for (int i = 0; i < ac; i++) {
     call_args[i] = codegen_expr(ctx, expr->call.args[i]);
     ptypes[i] = LLVMTypeOf(call_args[i]);
   }
+
   LLVMTypeRef rt = LLVMInt64TypeInContext(ctx->llvm_ctx);
   LLVMTypeRef ft = LLVMFunctionType(rt, ptypes, ac, false);
   LLVMValueRef func = LLVMAddFunction(ctx->module, name, ft);
@@ -629,6 +696,7 @@ LLVMValueRef codegen_call(CodeGenContext *ctx, ASTNode *expr) {
   LLVMValueRef result =
       LLVMBuildCall2(ctx->builder, ft, func, call_args, ac, "call");
   codegen_func_map_add(ctx, name, func, ft);
+
   if (call_args != stack_args)
     free(call_args);
   if (ptypes != stack_ptypes)
@@ -685,7 +753,7 @@ LLVMValueRef codegen_expr(CodeGenContext *ctx, ASTNode *expr) {
   case NODE_TABLE:
     return codegen_table(ctx, expr);
   case NODE_ASM_BLOCK:
-    return codegen_asm(ctx, expr);
+    return asm_emit(ctx, expr);
   case NODE_NIL_LITERAL:
     return LLVMConstNull(
         LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0));

@@ -439,8 +439,32 @@ ASTNode *parse_statement(Parser *p) {
   if (parser_match(p, TOKEN_ASM)) {
     parser_expect(p, TOKEN_LPAREN, "(");
     ASTNode *n = ast_create_node(NODE_ASM_BLOCK, line, col);
+
     n->asm_block.code = toktext(p);
     parser_expect(p, TOKEN_STRING, "asm code");
+
+    if (parser_match(p, TOKEN_COMMA)) {
+      n->asm_block.constraints = toktext(p);
+      parser_expect(p, TOKEN_STRING, "constraint string");
+
+      int cap = 4, cnt = 0;
+      ASTNode **ops = malloc(sizeof(ASTNode *) * cap);
+      while (parser_match(p, TOKEN_COMMA)) {
+        if (cnt >= cap) {
+          cap *= 2;
+          ops = realloc(ops, sizeof(ASTNode *) * cap);
+        }
+        ops[cnt++] = parse_expression(p);
+      }
+      n->asm_block.operands = ops;
+      n->asm_block.operand_count = cnt;
+    } else {
+      n->asm_block.constraints = NULL;
+      n->asm_block.operands = NULL;
+      n->asm_block.operand_count = 0;
+    }
+
+    n->asm_block.dialect = 0;
     parser_expect(p, TOKEN_RPAREN, ")");
     return n;
   }

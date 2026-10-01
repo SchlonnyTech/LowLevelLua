@@ -137,6 +137,7 @@ static ASTNode *parse_call_args(Parser *p, const char *name, int line,
   parser_advance(p);
   ASTNode *n = ast_create_node(NODE_CALL, line, col);
   n->call.name = parser_intern(p, name);
+  n->call.callee = NULL;
   int cap = 8, cnt = 0;
   ASTNode **args = malloc(sizeof(ASTNode *) * cap);
 
@@ -299,12 +300,40 @@ static ASTNode *parse_prefix(Parser *p) {
     const char *name = parser_intern(p, toktext(p));
     parser_advance(p);
 
-    if (parser_check(p, TOKEN_LPAREN))
-      return parse_call_args(p, name, line, col);
+    if (parser_check(p, TOKEN_LPAREN)) {
+      ASTNode *call = parse_call_args(p, name, line, col);
+      call->call.callee = NULL;
+      return call;
+    }
 
     ASTNode *n = ast_create_node(NODE_VARIABLE, line, col);
     n->variable.name = name;
-    return parse_postfix(p, n);
+    ASTNode *post = parse_postfix(p, n);
+
+    if (parser_check(p, TOKEN_LPAREN)) {
+      ASTNode *call = ast_create_node(NODE_CALL, line, col);
+      call->call.name = NULL;
+      call->call.callee = post;
+      parser_advance(p);
+
+      int cap = 4, cnt = 0;
+      ASTNode **args = malloc(sizeof(ASTNode *) * cap);
+      if (!parser_check(p, TOKEN_RPAREN)) {
+        do {
+          if (cnt >= cap) {
+            cap *= 2;
+            args = realloc(args, sizeof(ASTNode *) * cap);
+          }
+          args[cnt++] = parse_expression(p);
+        } while (parser_match(p, TOKEN_COMMA));
+      }
+      parser_expect(p, TOKEN_RPAREN, ")");
+      call->call.args = args;
+      call->call.arg_count = cnt;
+      return call;
+    }
+
+    return post;
   }
 
   if (parser_match(p, TOKEN_LPAREN)) {

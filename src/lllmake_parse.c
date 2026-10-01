@@ -159,7 +159,7 @@ int lllmake_build_from_file(const char *filename, BuildType build_type,
     }
 
     CodeGenContext ctx;
-    codegen_init(&ctx, sources[i], build_type);
+    codegen_init(&ctx, sources[i], build_type, NULL);
     ctx.verbose = verbose;
 
     bool success = codegen_generate(&ctx, ast);

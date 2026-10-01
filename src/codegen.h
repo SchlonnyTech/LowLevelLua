@@ -2,6 +2,7 @@
 #define LLL_CODEGEN_H
 
 #include "ast.h"
+#include "lll.h"
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
 #include <llvm-c/Core.h>
@@ -135,6 +136,12 @@ typedef struct CodeGenContext {
   LLVMValueRef strcmp_fn;
   LLVMValueRef strcat_fn;
   LLVMValueRef malloc_fn;
+  LLVMValueRef dlopen_fn;
+  LLVMValueRef dlsym_fn;
+  LLVMValueRef dlclose_fn;
+  LLVMTypeRef dlopen_type;
+  LLVMTypeRef dlsym_type;
+  LLVMTypeRef dlclose_type;
   LLVMValueRef fmt_int;
   LLVMValueRef fmt_flt;
   LLVMTypeRef printf_type;
@@ -183,11 +190,15 @@ typedef struct CodeGenContext {
   int instructions_generated;
   LLVMValueRef int_format;
   LLVMValueRef str_format;
+
+  Platform target_platform;
+  char *target_triple_override;
 } CodeGenContext;
 
 void codegen_init(CodeGenContext *ctx, const char *module_name,
-                  BuildType build_type);
+                  BuildType build_type, const char *target_triple_override);
 void codegen_destroy(CodeGenContext *ctx);
+void codegen_set_target(CodeGenContext *ctx, const char *triple);
 bool codegen_generate(CodeGenContext *ctx, ASTNode *program);
 bool codegen_compile_to_file(CodeGenContext *ctx, const char *output_file);
 bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file);
@@ -260,7 +271,6 @@ FuncEntry *codegen_func_map_find(CodeGenContext *ctx, const char *name);
 int codegen_op_from_string(const char *s);
 int codegen_is_float_ty(LLVMTypeRef t);
 int codegen_is_str_ty(LLVMTypeRef t);
-int llvm_get_builtin_type(CodeGenContext *ctx, const char *name);
 LLVMValueRef codegen_arith_binop(CodeGenContext *ctx, OpKind op, LLVMValueRef l,
                                  LLVMValueRef r);
 LLVMValueRef codegen_arith_strconcat(CodeGenContext *ctx, LLVMValueRef l,
@@ -269,8 +279,10 @@ LLVMValueRef codegen_arith_strcmp(CodeGenContext *ctx, OpKind op,
                                   LLVMValueRef l, LLVMValueRef r);
 LLVMValueRef codegen_arith_unary(CodeGenContext *ctx, const char *op,
                                  LLVMValueRef v);
+
 void codegen_run_opt_passes(CodeGenContext *ctx);
-LLVMValueRef codegen_table_index(CodeGenContext *ctx, ASTNode *expr,
-                                 LLVMValueRef arr, LLVMValueRef idx,
-                                 int is_typed, LLVMTypeRef elem_type);
+LLVMValueRef codegen_ffi_open(CodeGenContext *ctx, ASTNode *expr);
+LLVMValueRef codegen_ffi_sym(CodeGenContext *ctx, ASTNode *expr);
+LLVMValueRef codegen_ffi_call(CodeGenContext *ctx, ASTNode *expr);
+LLVMValueRef codegen_indirect_call(CodeGenContext *ctx, ASTNode *expr);
 #endif

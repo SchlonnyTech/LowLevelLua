@@ -1,0 +1,24 @@
+name: windows
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-ninja
+      - shell: msys2 {0}
+        run: |
+          cmake -B build -G Ninja
+          cmake --build build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lllc-windows
+          path: build/lllc.exe

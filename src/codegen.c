@@ -136,9 +136,12 @@ FuncEntry *codegen_func_map_find(CodeGenContext *ctx, const char *name) {
 }
 
 void codegen_init(CodeGenContext *ctx, const char *module_name,
-                  BuildType build_type) {
+                  BuildType build_type, const char *target_triple_override) {
   memset(ctx, 0, sizeof(*ctx));
   ctx->build_type = build_type;
+  ctx->target_platform = PLATFORM_LINUX;
+  ctx->target_triple_override =
+      target_triple_override ? strdup(target_triple_override) : NULL;
 
   init_llvm_once();
   init_type_cache(ctx);
@@ -148,10 +151,26 @@ void codegen_init(CodeGenContext *ctx, const char *module_name,
   ctx->module = LLVMModuleCreateWithNameInContext(module_name, ctx->llvm_ctx);
   ctx->builder = LLVMCreateBuilderInContext(ctx->llvm_ctx);
 
-  char *triple = LLVMGetDefaultTargetTriple();
-  ctx->target_triple = strdup(triple ? triple : "x86_64-unknown-linux-gnu");
-  if (triple)
-    LLVMDisposeMessage(triple);
+  if (ctx->target_triple_override) {
+    ctx->target_triple = strdup(ctx->target_triple_override);
+  } else {
+    char *triple = LLVMGetDefaultTargetTriple();
+    ctx->target_triple = strdup(triple ? triple : "x86_64-unknown-linux-gnu");
+    if (triple)
+      LLVMDisposeMessage(triple);
+  }
+  LLVMSetTarget(ctx->module, ctx->target_triple);
+
+  if (strstr(ctx->target_triple, "windows") ||
+      strstr(ctx->target_triple, "mingw") || strstr(ctx->target_triple, "msvc"))
+    ctx->target_platform = PLATFORM_WINDOWS;
+  else if (strstr(ctx->target_triple, "darwin") ||
+           strstr(ctx->target_triple, "apple"))
+    ctx->target_platform = PLATFORM_MACOS;
+  else if (strstr(ctx->target_triple, "linux"))
+    ctx->target_platform = PLATFORM_LINUX;
+  else
+    ctx->target_platform = PLATFORM_UNKNOWN;
 
   char *cpu = LLVMGetHostCPUName();
   ctx->cpu_name = strdup(cpu ? cpu : "generic");
@@ -179,6 +198,11 @@ void codegen_init(CodeGenContext *ctx, const char *module_name,
   create_lll_syscall(ctx);
 }
 
+void codegen_set_target(CodeGenContext *ctx, const char *triple) {
+  free(ctx->target_triple_override);
+  ctx->target_triple_override = triple ? strdup(triple) : NULL;
+}
+
 void codegen_destroy(CodeGenContext *ctx) {
   if (!ctx)
     return;
@@ -199,9 +223,11 @@ void codegen_destroy(CodeGenContext *ctx) {
   free(ctx->target_triple);
   free(ctx->cpu_name);
   free(ctx->cpu_features);
+  free(ctx->target_triple_override);
   ctx->target_triple = NULL;
   ctx->cpu_name = NULL;
   ctx->cpu_features = NULL;
+  ctx->target_triple_override = NULL;
 
   if (ctx->target_machine) {
     LLVMDisposeTargetMachine(ctx->target_machine);
@@ -286,6 +312,13 @@ void codegen_destroy(CodeGenContext *ctx) {
   ctx->struct_types.lookups = NULL;
   ctx->struct_types.count = 0;
   ctx->struct_types.capacity = 0;
+
+  ctx->dlopen_fn = NULL;
+  ctx->dlsym_fn = NULL;
+  ctx->dlclose_fn = NULL;
+  ctx->dlopen_type = NULL;
+  ctx->dlsym_type = NULL;
+  ctx->dlclose_type = NULL;
 }
 
 LLVMTypeRef codegen_type_from_string(CodeGenContext *ctx,
@@ -346,48 +379,6 @@ LLVMTypeRef codegen_type_from_string(CodeGenContext *ctx,
   return type;
 }
 
-static bool ensure_target_machine(CodeGenContext *ctx) {
-  if (ctx->target_machine)
-    return true;
-  char *error = NULL;
-  LLVMTargetRef target = NULL;
-  if (LLVMGetTargetFromTriple(ctx->target_triple, &target, &error) != 0) {
-    codegen_error(ctx, "Failed to get target: %s", error ? error : "unknown");
-    if (error)
-      LLVMDisposeMessage(error);
-    return false;
-  }
-  ctx->target_machine = LLVMCreateTargetMachine(
-      target, ctx->target_triple, ctx->cpu_name, ctx->cpu_features,
-      ctx->optimization_level, LLVMRelocDefault, LLVMCodeModelDefault);
-  if (!ctx->target_machine) {
-    codegen_error(ctx, "Failed to create target machine");
-    return false;
-  }
-  return true;
-}
-
-void codegen_run_opt_passes(CodeGenContext *ctx) {
-  if (ctx->build_type != BUILD_RELEASE)
-    return;
-  if (!ensure_target_machine(ctx))
-    return;
-
-  LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
-
-  LLVMPassBuilderOptionsSetLoopVectorization(opts, 1);
-  LLVMPassBuilderOptionsSetLoopUnrolling(opts, 1);
-
-  LLVMErrorRef r =
-      LLVMRunPasses(ctx->module, "default<O3>", ctx->target_machine, opts);
-  if (r) {
-    char *msg = LLVMGetErrorMessage(r);
-    fprintf(stderr, "opt failed: %s\n", msg);
-    LLVMDisposeErrorMessage(msg);
-  }
-  LLVMDisposePassBuilderOptions(opts);
-}
-
 LLVMTypeRef codegen_type_from_node(CodeGenContext *ctx, ASTNode *type_node) {
   if (!type_node || type_node->type != NODE_TYPE_ANNOTATION)
     return LLVMInt64TypeInContext(ctx->llvm_ctx);
@@ -430,6 +421,53 @@ LLVMTypeRef codegen_infer_type(CodeGenContext *ctx, ASTNode *expr) {
   default:
     return LLVMInt64TypeInContext(ctx->llvm_ctx);
   }
+}
+
+static bool ensure_target_machine(CodeGenContext *ctx) {
+  if (ctx->target_machine)
+    return true;
+  char *error = NULL;
+  LLVMTargetRef target = NULL;
+  if (LLVMGetTargetFromTriple(ctx->target_triple, &target, &error) != 0) {
+    codegen_error(ctx, "Failed to get target: %s", error ? error : "unknown");
+    if (error)
+      LLVMDisposeMessage(error);
+    return false;
+  }
+  const char *cpu = ctx->cpu_name;
+  const char *feat = ctx->cpu_features;
+  if (ctx->target_platform == PLATFORM_WINDOWS) {
+    cpu = "generic";
+    feat = "";
+  }
+  ctx->target_machine = LLVMCreateTargetMachine(
+      target, ctx->target_triple, cpu, feat, ctx->optimization_level,
+      LLVMRelocDefault, LLVMCodeModelDefault);
+  if (!ctx->target_machine) {
+    codegen_error(ctx, "Failed to create target machine");
+    return false;
+  }
+  return true;
+}
+
+void codegen_run_opt_passes(CodeGenContext *ctx) {
+  if (ctx->build_type != BUILD_RELEASE)
+    return;
+  if (!ensure_target_machine(ctx))
+    return;
+
+  LLVMPassBuilderOptionsRef opts = LLVMCreatePassBuilderOptions();
+  LLVMPassBuilderOptionsSetLoopVectorization(opts, 1);
+  LLVMPassBuilderOptionsSetLoopUnrolling(opts, 1);
+
+  LLVMErrorRef r =
+      LLVMRunPasses(ctx->module, "default<O3>", ctx->target_machine, opts);
+  if (r) {
+    char *msg = LLVMGetErrorMessage(r);
+    fprintf(stderr, "opt failed: %s\n", msg);
+    LLVMDisposeErrorMessage(msg);
+  }
+  LLVMDisposePassBuilderOptions(opts);
 }
 
 void codegen_error(CodeGenContext *ctx, const char *fmt, ...) {
@@ -599,22 +637,8 @@ LLVMBasicBlockRef codegen_get_continue_block(CodeGenContext *ctx) {
 
 bool codegen_compile_to_object(CodeGenContext *ctx, const char *output_file) {
   char *error = NULL;
-  LLVMTargetRef target = NULL;
-  if (!ctx->target_machine) {
-    if (LLVMGetTargetFromTriple(ctx->target_triple, &target, &error) != 0) {
-      codegen_error(ctx, "Failed to get target: %s", error ? error : "unknown");
-      if (error)
-        LLVMDisposeMessage(error);
-      return false;
-    }
-    ctx->target_machine = LLVMCreateTargetMachine(
-        target, ctx->target_triple, ctx->cpu_name, ctx->cpu_features,
-        ctx->optimization_level, LLVMRelocDefault, LLVMCodeModelDefault);
-  }
-  if (!ctx->target_machine) {
-    codegen_error(ctx, "Failed to create target machine");
+  if (!ensure_target_machine(ctx))
     return false;
-  }
   if (ctx->build_type == BUILD_DEBUG && !ctx->module_verified) {
     char *verify_error = NULL;
     if (LLVMVerifyModule(ctx->module, LLVMReturnStatusAction, &verify_error)) {

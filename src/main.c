@@ -28,6 +28,7 @@ typedef struct {
   char *output_file;
   char *direct_input;
   char *module_name;
+  char *target_triple;
   bool emit_llvm;
   bool emit_object;
   bool verbose;
@@ -90,6 +91,14 @@ static Options parse_args(int argc, char **argv) {
       o.build_type = BUILD_RELEASE;
     else if (strcmp(a, "--debug") == 0 || strcmp(a, "-debug") == 0)
       o.build_type = BUILD_DEBUG;
+    else if (strcmp(a, "--target") == 0 && i + 1 < argc)
+      o.target_triple = argv[++i];
+    else if (strcmp(a, "--windows") == 0)
+      o.target_triple = "x86_64-w64-windows-gnu";
+    else if (strcmp(a, "--linux") == 0)
+      o.target_triple = "x86_64-unknown-linux-gnu";
+    else if (strcmp(a, "--macos") == 0)
+      o.target_triple = "x86_64-apple-darwin";
     else if (strcmp(a, "--about") == 0) {
       banner();
       exit(0);
@@ -110,6 +119,10 @@ static Options parse_args(int argc, char **argv) {
       printf("  --x86        32-bit mode\n");
       printf("  --release    Release build (optimized)\n");
       printf("  --debug      Debug build (default)\n");
+      printf("  --windows    Target Windows x86_64 (MinGW)\n");
+      printf("  --linux      Target Linux x86_64\n");
+      printf("  --macos      Target macOS x86_64\n");
+      printf("  --target <t> Custom LLVM target triple\n");
       printf("  --version    Show version information\n");
       printf("  --about      Show banner\n");
       exit(0);
@@ -172,6 +185,8 @@ static ParseResult do_parse(const char *src) {
   p->intern = NULL;
   parser_destroy(p);
 
+  for (int i = 0; i < r.token_count; i++)
+    free(t[i].text);
   free(t);
   return r;
 }
@@ -185,7 +200,7 @@ static int run_jit(const char *src, Options *opts) {
   }
 
   CodeGenContext ctx;
-  codegen_init(&ctx, "lll_jit", opts->build_type);
+  codegen_init(&ctx, "lll_jit", opts->build_type, opts->target_triple);
   ctx.verbose = opts->verbose;
 
   bool success = codegen_generate(&ctx, r.ast);
@@ -238,6 +253,19 @@ static void print_stats(const char *status, const char *out, int tokens,
   printf("  Parse:   %.2f ms\n", parse);
   printf("  Codegen: %.2f ms\n", cg);
   printf("##############################################\n");
+}
+
+static const char *select_linker(CodeGenContext *ctx) {
+#if defined(_WIN32)
+  (void)ctx;
+  return "gcc";
+#else
+  if (ctx->target_platform == PLATFORM_WINDOWS)
+    return "x86_64-w64-mingw32-gcc";
+  if (ctx->target_platform == PLATFORM_MACOS)
+    return "clang";
+  return "gcc";
+#endif
 }
 
 int main(int argc, char **argv) {
@@ -311,7 +339,7 @@ int main(int argc, char **argv) {
 
   double t_cg_start = ms();
   CodeGenContext ctx;
-  codegen_init(&ctx, output_base, opts.build_type);
+  codegen_init(&ctx, output_base, opts.build_type, opts.target_triple);
   ctx.verbose = opts.verbose;
   ctx.is_module = opts.is_module;
 
@@ -328,8 +356,18 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  int is_win = (ctx.target_platform == PLATFORM_WINDOWS);
+  const char *obj_ext = is_win ? ".obj" : ".o";
+  const char *exe_ext = is_win ? ".exe" : "";
+
   char *llvm_file = string_format("%s.ll", output_base);
-  char *obj_file = string_format("%s.o", output_base);
+  char *obj_file = string_format("%s%s", output_base, obj_ext);
+  char *exe_file;
+  if (is_win && output_base && strlen(output_base) > 4 &&
+      strcmp(output_base + strlen(output_base) - 4, ".exe") == 0)
+    exe_file = strdup(output_base);
+  else
+    exe_file = string_format("%s%s", output_base, exe_ext);
 
   int ret = 0;
 
@@ -340,13 +378,21 @@ int main(int argc, char **argv) {
                 opts.build_type);
   } else {
     if (codegen_compile_to_object(&ctx, obj_file)) {
-      char *link_cmd =
-          string_format("gcc -no-pie %s -o %s", obj_file, output_base);
+      const char *linker = select_linker(&ctx);
+      char *link_cmd;
+
+      if (ctx.target_platform == PLATFORM_WINDOWS)
+        link_cmd = string_format("%s -o %s %s -lm", linker, exe_file, obj_file);
+      else if (ctx.target_platform == PLATFORM_MACOS)
+        link_cmd = string_format("%s -o %s %s", linker, exe_file, obj_file);
+      else
+        link_cmd = string_format("gcc -no-pie %s -o %s", obj_file, exe_file);
+
       ret = system(link_cmd);
       free(link_cmd);
 
       if (ret == 0) {
-        print_stats("OK", output_base, r.token_count, ms() - t0,
+        print_stats("OK", exe_file, r.token_count, ms() - t0,
                     t_parse_end - t_parse_start, t_cg_end - t_cg_start,
                     opts.build_type);
       } else {
@@ -365,6 +411,7 @@ int main(int argc, char **argv) {
   free(output_base);
   free(llvm_file);
   free(obj_file);
+  free(exe_file);
 
   return ret;
 }

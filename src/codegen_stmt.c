@@ -1,3 +1,4 @@
+#include "asm.h"
 #include "codegen.h"
 #include "utils.h"
 #include <stdio.h>
@@ -604,7 +605,8 @@ void codegen_stmt(CodeGenContext *ctx, ASTNode *stmt) {
     codegen_defer(ctx, stmt);
     break;
   case NODE_ASM_BLOCK:
-    codegen_asm(ctx, stmt);
+    asm_emit(ctx, stmt);
+    break;
     break;
   case NODE_BREAK: {
     DPRINTF_STMT("break\n");

@@ -1,0 +1,9 @@
+function main(): int
+    local msg: string = "hello from inline asm\n"
+
+    asm("movq $1, %rax\nmovq $1, %rdi\nmovq {0}, %rsi\nmovq $22, %rdx\nsyscall",
+        "~{rax} ~{rdi} ~{rdx} ~{rcx} ~{r11}",
+        msg)
+
+    return 0
+end

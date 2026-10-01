@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "lll.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -82,8 +83,27 @@ int llvm_get_builtin_type(CodeGenContext *ctx, const char *name) {
   return -1;
 }
 
+static LLVMValueRef get_dlopen(CodeGenContext *ctx) {
+  if (ctx->dlopen_fn)
+    return ctx->dlopen_fn;
+  LLVMTypeRef i8p = LLVMPointerType(LLVMInt8TypeInContext(ctx->llvm_ctx), 0);
+  LLVMTypeRef i32t = LLVMInt32TypeInContext(ctx->llvm_ctx);
+  LLVMTypeRef ft = LLVMFunctionType(i8p, (LLVMTypeRef[]){i8p, i32t}, 2, 0);
+
+  const char *name =
+      ctx->target_platform == PLATFORM_WINDOWS ? "LoadLibraryA" : "dlopen";
+  ctx->dlopen_fn = LLVMGetNamedFunction(ctx->module, name);
+  if (!ctx->dlopen_fn)
+    ctx->dlopen_fn = LLVMAddFunction(ctx->module, name, ft);
+  return ctx->dlopen_fn;
+}
+
 LLVMValueRef codegen_syscall(CodeGenContext *ctx, int syscall_num,
                              LLVMValueRef *args, int arg_count) {
+  if (ctx->target_platform == PLATFORM_WINDOWS) {
+    codegen_error(ctx, "syscall is not supported on Windows targets");
+    return LLVMConstInt(LLVMInt64TypeInContext(ctx->llvm_ctx), 0, 0);
+  }
   LLVMTypeRef i64 = LLVMInt64TypeInContext(ctx->llvm_ctx);
 
   LLVMTypeRef syscall_type = LLVMFunctionType(

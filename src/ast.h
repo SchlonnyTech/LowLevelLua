@@ -4,7 +4,9 @@
 #include <llvm-c/Types.h>
 #include <stdbool.h>
 #include <stdint.h>
+
 typedef struct LLVMOpaqueType *LLVMTypeRef;
+
 typedef enum {
   OP_NONE,
   OP_ADD,
@@ -23,7 +25,9 @@ typedef enum {
   OP_INDEX,
   OP_RANGE
 } OpKind;
+
 typedef enum { TABLE_DYN, TABLE_INT, TABLE_STR, TABLE_FLOAT } TableKind;
+
 typedef enum {
   NODE_PROGRAM,
   NODE_BLOCK,
@@ -101,6 +105,7 @@ typedef struct {
 
 typedef struct {
   const char *name;
+  ASTNode *callee;
   ASTNode **args;
   int arg_count;
 } CallNode;
@@ -108,15 +113,19 @@ typedef struct {
 typedef struct {
   const char *name;
 } VariableNode;
+
 typedef struct {
   int64_t value;
 } IntLiteralNode;
+
 typedef struct {
   double value;
 } FloatLiteralNode;
+
 typedef struct {
   const char *value;
 } StringLiteralNode;
+
 typedef struct {
   bool value;
 } BoolLiteralNode;
@@ -153,6 +162,7 @@ typedef struct {
   ASTNode *condition;
   ASTNode *body;
 } WhileNode;
+
 typedef struct {
   ASTNode *body;
   ASTNode *condition;
@@ -194,6 +204,7 @@ typedef struct {
   ASTNode *object;
   const char *field;
 } FieldAccessNode;
+
 typedef struct {
   ASTNode *condition;
   ASTNode *then_expr;
@@ -215,30 +226,42 @@ typedef struct {
 
 typedef struct {
   const char *code;
+  const char *constraints;
+  ASTNode **operands;
+  int operand_count;
+  int dialect;
 } AsmBlockNode;
+
 typedef struct {
   const char *code;
 } CBlockNode;
+
 typedef struct {
   ASTNode *expr;
 } DeferNode;
+
 typedef struct {
   const char *module_path;
 } ImportNode;
+
 typedef struct {
   const char *name;
   ASTNode *body;
 } ModuleNode;
+
 typedef struct {
   ASTNode *operand;
 } PointerDerefNode;
+
 typedef struct {
   ASTNode *operand;
 } AddressOfNode;
+
 typedef struct {
   const char *type_name;
   int pointer_depth;
 } TypeAnnotationNode;
+
 typedef struct {
   const char *name;
   ASTNode **args;
