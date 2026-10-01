@@ -1,0 +1,109 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM and build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            llvm-18-dev libllvm18 llvm-18 \
+            clang-18 cmake ninja-build build-essential \
+            libtcc-dev
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_DIR=/usr/lib/llvm-18/lib/cmake/llvm
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Rename artifact
+        run: |
+          mkdir -p dist
+          cp build/lllc dist/lllc-linux-x86_64
+          strip dist/lllc-linux-x86_64 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lllc-linux-x86_64
+          path: dist/lllc-linux-x86_64
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-llvm
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Bundle runtime DLLs
+        run: |
+          mkdir -p dist
+          cp build/lllc.exe dist/lllc-windows-x86_64.exe
+          for dll in libLLVM-*.dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll; do
+            found=$(find /ucrt64/bin -maxdepth 1 -name "$dll" 2>/dev/null | head -1)
+            [ -n "$found" ] && cp "$found" dist/ || true
+          done
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lllc-windows-x86_64
+          path: dist/
+
+  release:
+    name: Attach to release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          cd artifacts
+          zip -r lllc-linux-x86_64.zip lllc-linux-x86_64/
+          zip -r lllc-windows-x86_64.zip lllc-windows-x86_64/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/lllc-linux-x86_64.zip
+            artifacts/lllc-windows-x86_64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
